@@ -133,7 +133,7 @@ go version
 ## 二、下载项目
 
 ```bash
-git clone https://github.com/sorosnow/autosail.git
+git clone https://github.com/soroice/autosail.git
 cd autosail
 ```
 
