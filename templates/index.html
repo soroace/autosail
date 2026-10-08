@@ -328,7 +328,7 @@
                       <div class="flex-1 min-w-0">
                         <div class="flex items-center gap-3 mb-3">
                           <div class="font-extrabold text-slate-800 text-base truncate">{{.Name}}</div>
-                          <span class="inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-bold ring-1 ring-inset {{if eq .State "running"}}bg-emerald-50 text-emerald-700 ring-emerald-600/20{{else}}bg-slate-100 text-slate-600 ring-slate-500/20{{end}}">
+                          <span data-state="{{.State}}" class="inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-bold ring-1 ring-inset {{if eq .State "running"}}bg-emerald-50 text-emerald-700 ring-emerald-600/20{{else}}bg-slate-100 text-slate-600 ring-slate-500/20{{end}}">
                             {{if eq .State "running"}}● Running{{else}}○ {{.State}}{{end}}
                           </span>
                           <span class="text-[10px] text-slate-400 border border-slate-200 rounded px-1.5 py-0.5 bg-slate-50 font-mono">{{.BundleID}}</span>
@@ -360,10 +360,10 @@
                           <button class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition shadow-sm disabled:opacity-50" {{if not .PublicIPv4}}disabled{{end}}>换IP</button>
                         </form>
                         <form method="post" action="/aws/openall" data-ajax><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="region" value="{{$.Region}}"><input type="hidden" name="instance" value="{{.Name}}">
-                          <button class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-bold text-amber-700 hover:bg-amber-100 transition">全端口</button>
+                          <button class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-bold text-amber-700 hover:bg-amber-100 hover:border-amber-400 hover:text-amber-800 transition">全端口</button>
                         </form>
                         <form method="post" action="/aws/delete" data-ajax data-confirm="确定删除 {{.Name}} 吗？此操作不可恢复。" data-confirm-action="删除" data-confirm-variant="danger"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="region" value="{{$.Region}}"><input type="hidden" name="instance" value="{{.Name}}">
-                          <button class="rounded-lg bg-rose-50 border border-rose-100 text-rose-600 px-3 py-1.5 text-xs font-bold hover:bg-rose-600 hover:text-white transition">删除</button>
+                          <button class="rounded-lg bg-rose-50 border border-rose-200 text-rose-600 px-3 py-1.5 text-xs font-bold hover:bg-rose-100 hover:border-rose-300 hover:text-rose-700 transition">删除</button>
                         </form>
                       </div>
                     </div>
@@ -379,6 +379,9 @@
                               <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
                            </div>
                           <div class="font-extrabold text-slate-800 text-base truncate">{{if .Name}}{{.Name}}{{else}}{{.ID}}{{end}}</div>
+                          <span data-state="{{.State}}" class="inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-bold ring-1 ring-inset {{if eq .State "running"}}bg-emerald-50 text-emerald-700 ring-emerald-600/20{{else}}bg-slate-100 text-slate-600 ring-slate-500/20{{end}}">
+                            {{if eq .State "running"}}● Running{{else}}○ {{.State}}{{end}}
+                          </span>
                         </div>
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-y-2 gap-x-8 text-xs font-mono">
                           <div class="flex items-center gap-2 group/ip">
@@ -394,11 +397,11 @@
                         </div>
                       </div>
                       <div class="flex flex-wrap items-center gap-2 pt-4 lg:pt-0 lg:border-l lg:border-slate-100 lg:pl-6">
-                        <form method="post" action="/aws/ec2/start" data-ajax><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="region" value="{{$.Region}}"><input type="hidden" name="instance" value="{{.ID}}"><button class="rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700 hover:bg-emerald-100 transition">启动</button></form>
+                        <form method="post" action="/aws/ec2/start" data-ajax><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="region" value="{{$.Region}}"><input type="hidden" name="instance" value="{{.ID}}"><button class="rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700 hover:bg-emerald-100 hover:border-emerald-300 hover:text-emerald-800 transition">启动</button></form>
                         <form method="post" action="/aws/ec2/stop" data-ajax><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="region" value="{{$.Region}}"><input type="hidden" name="instance" value="{{.ID}}"><button class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50 transition">停止</button></form>
                         <form method="post" action="/aws/ec2/reboot" data-ajax><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="region" value="{{$.Region}}"><input type="hidden" name="instance" value="{{.ID}}"><button class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50 transition">重启</button></form>
-                        <form method="post" action="/aws/ec2/openall" data-ajax><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="region" value="{{$.Region}}"><input type="hidden" name="instance" value="{{.ID}}"><button class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-bold text-amber-700 hover:bg-amber-100 transition">全端口</button></form>
-                        <form method="post" action="/aws/ec2/terminate" data-ajax data-confirm="确定终止 {{.ID}} 吗？实例关机后将不可恢复。" data-confirm-action="终止" data-confirm-variant="danger"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="region" value="{{$.Region}}"><input type="hidden" name="instance" value="{{.ID}}"><button class="rounded-lg bg-rose-50 border border-rose-100 text-rose-600 px-3 py-1.5 text-xs font-bold hover:bg-rose-600 hover:text-white transition">终止</button></form>
+                        <form method="post" action="/aws/ec2/openall" data-ajax><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="region" value="{{$.Region}}"><input type="hidden" name="instance" value="{{.ID}}"><button class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-bold text-amber-700 hover:bg-amber-100 hover:border-amber-400 hover:text-amber-800 transition">全端口</button></form>
+                        <form method="post" action="/aws/ec2/terminate" data-ajax data-confirm="确定终止 {{.ID}} 吗？实例关机后将不可恢复。" data-confirm-action="终止" data-confirm-variant="danger"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="region" value="{{$.Region}}"><input type="hidden" name="instance" value="{{.ID}}"><button class="rounded-lg bg-rose-50 border border-rose-200 text-rose-600 px-3 py-1.5 text-xs font-bold hover:bg-rose-100 hover:border-rose-300 hover:text-rose-700 transition">终止</button></form>
                       </div>
                     </div>
                   </div>

@@ -211,6 +211,56 @@
   });
 })();
 
+// -------------------- 实例列表静默刷新 --------------------
+// 存在过渡态实例时每 12s 静默刷新（间隔需大于服务端 10s 实例缓存）
+(function(){
+  const TRANSITIONAL = ['pending', 'stopping', 'shutting-down'];
+  const POLL_MS = 12000;
+  let inFlight = false;
+
+  function hasTransitional(){
+    return Array.from(document.querySelectorAll('[data-state]')).some((el) =>
+      TRANSITIONAL.includes((el.getAttribute('data-state') || '').toLowerCase())
+    );
+  }
+
+  // 副本上剥掉动画类再比较，替换用原件
+  function normalizedHtml(root){
+    const clone = root.cloneNode(true);
+    clone.classList.remove('animate-fade-in');
+    return clone.outerHTML;
+  }
+
+  async function silentRefresh(){
+    if(inFlight) return;
+    inFlight = true;
+    try{
+      const resp = await fetch(window.location.href, {headers: {'X-Requested-With': 'fetch-tab'}});
+      if(!resp.ok) return;
+      const html = await resp.text();
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const newRoot = doc.getElementById('tab-root');
+      const curRoot = document.getElementById('tab-root');
+      if(!newRoot || !curRoot) return;
+      // 替换前重校验，期间有变动则放弃本次
+      if(document.getElementById('tab-root') !== curRoot) return;
+      if(window.__ajaxFormBusy) return;
+      if(document.querySelector('.custom-confirm-mask.is-open')) return;
+      if(normalizedHtml(newRoot) === normalizedHtml(curRoot)) return;
+      newRoot.classList.remove('animate-fade-in');
+      curRoot.replaceWith(newRoot);
+    }catch(e){ /* 网络抖动等下次轮询 */ }
+    finally{ inFlight = false; }
+  }
+
+  setInterval(() => {
+    if(document.visibilityState !== 'visible') return;          // 后台标签页不请求
+    if(document.querySelector('.custom-confirm-mask.is-open')) return; // 确认弹窗打开时不刷
+    if(!document.getElementById('tab-root')) return;
+    if(hasTransitional()) silentRefresh();
+  }, POLL_MS);
+})();
+
 // -------------------- 复制 IP + 标签页 AJAX 切换 --------------------
 async function copyText(text){
   if(!text) return;
@@ -351,6 +401,8 @@ async function copyText(text){
   });
 
   async function handleAjaxSubmit(form){
+    // AJAX 提交计数，静默刷新据此避让
+    window.__ajaxFormBusy = (window.__ajaxFormBusy || 0) + 1;
     const submitButtons = Array.from(form.querySelectorAll('button')).filter((btn) => {
       const type = (btn.getAttribute('type') || 'submit').toLowerCase();
       return type === 'submit';
@@ -382,6 +434,7 @@ async function copyText(text){
       if(window.__cleanURLMsg) window.__cleanURLMsg();
     }catch(e){ window.location.href = form.action; }
     finally{
+      window.__ajaxFormBusy = Math.max(0, (window.__ajaxFormBusy || 0) - 1);
       submitButtons.forEach((btn) => {
         btn.disabled = false;
         if(btn.dataset.originalText){
