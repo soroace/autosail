@@ -2,7 +2,10 @@ package aws
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -10,6 +13,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/lightsail"
 	"github.com/aws/aws-sdk-go-v2/service/lightsail/types"
+	"github.com/aws/smithy-go"
 )
 
 type InstanceView struct {
@@ -181,11 +185,73 @@ func OpenAllPorts(ctx context.Context, cli LightsailAPI, instanceName string) er
 }
 
 func DeleteInstanceWithStaticIPCleanup(ctx context.Context, cli LightsailAPI, name string) error {
-	// try detach & release any attached static ip first
-	_, _ = DeletePreviousStaticIPOnlyForInstance(ctx, cli, name)
+	// 清理失败则中止，避免留下计费孤儿 IP
+	if _, err := DeletePreviousStaticIPOnlyForInstance(ctx, cli, name); err != nil {
+		return fmt.Errorf("清理静态IP失败，已中止删除：%v", err)
+	}
 
 	return SafeRetry("删除实例", 8, 1200*time.Millisecond, func() error {
 		_, err := cli.DeleteInstance(ctx, &lightsail.DeleteInstanceInput{InstanceName: &name})
+		return err
+	})
+}
+
+// errNewIPAlreadyAttached：新 IP 实际已绑定成功（响应丢失），此时绝不能释放
+var errNewIPAlreadyAttached = errors.New("新静态IP已处于绑定状态")
+
+// isAPIErrorCode 按 AWS 错误码区分「资源不存在」与网络/权限等错误
+func isAPIErrorCode(err error, codes ...string) bool {
+	var apiErr smithy.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	for _, code := range codes {
+		if apiErr.ErrorCode() == code {
+			return true
+		}
+	}
+	return false
+}
+
+func isStaticIPNotFound(err error) bool {
+	return isAPIErrorCode(err, "NotFoundException", "ResourceNotFoundException", "NoSuchEntity")
+}
+
+func isAccessDenied(err error) bool {
+	return isAPIErrorCode(err, "AccessDeniedException", "UnauthorizedException", "AccessDenied")
+}
+
+// newStaticIPName 生成唯一名称，避免撞名时误释放他人的同名 IP
+func newStaticIPName(instanceName string) string {
+	base := sanitize(instanceName)
+	if len(base) > 40 {
+		base = base[:40]
+	}
+	var b [4]byte
+	_, _ = rand.Read(b[:])
+	return fmt.Sprintf("sip-%s-%d-%s", base, time.Now().UnixNano(), hex.EncodeToString(b[:]))
+}
+
+// releaseNewIP 回收未成功绑定的新 IP；已绑定则返回 errNewIPAlreadyAttached。用 WithoutCancel 保证关页面后仍能回收
+func releaseNewIP(ctx context.Context, cli LightsailAPI, name string) error {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+
+	out, err := cli.GetStaticIp(cleanupCtx, &lightsail.GetStaticIpInput{StaticIpName: &name})
+	if err != nil {
+		if isStaticIPNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("确认 %s 状态失败：%v", name, err)
+	}
+	if out == nil || out.StaticIp == nil {
+		return nil
+	}
+	if out.StaticIp.IsAttached != nil && *out.StaticIp.IsAttached {
+		return errNewIPAlreadyAttached
+	}
+	return SafeRetry("释放未绑定的新静态IP", 4, 1200*time.Millisecond, func() error {
+		_, err := cli.ReleaseStaticIp(cleanupCtx, &lightsail.ReleaseStaticIpInput{StaticIpName: &name})
 		return err
 	})
 }
@@ -204,16 +270,23 @@ func SwapStaticIPForInstance(ctx context.Context, cli LightsailAPI, instanceName
 		}
 	}
 
-	// detach/release old
-	_, _ = DeletePreviousStaticIPOnlyForInstance(ctx, cli, instanceName)
+	// 旧 IP 未释放成功则中止，避免新旧两份计费
+	if _, err := DeletePreviousStaticIPOnlyForInstance(ctx, cli, instanceName); err != nil {
+		return fmt.Errorf("清理旧静态IP失败，已中止换IP：%v", err)
+	}
 
 	// allocate new and attach
-	newName := fmt.Sprintf("sip-%s-%d", sanitize(instanceName), time.Now().Unix())
+	newName := newStaticIPName(instanceName)
+
 	if err := SafeRetry("申请新静态IP", 8, 1200*time.Millisecond, func() error {
 		_, err := cli.AllocateStaticIp(ctx, &lightsail.AllocateStaticIpInput{StaticIpName: &newName})
 		return err
 	}); err != nil {
-		return err
+		// 重试途中可能已创建成功，先查状态再决定是否回收
+		if cleanupErr := releaseNewIP(ctx, cli, newName); cleanupErr != nil {
+			return fmt.Errorf("申请静态IP失败：%v；回收未确认：%v", err, cleanupErr)
+		}
+		return fmt.Errorf("申请静态IP失败：%v", err)
 	}
 
 	if err := SafeRetry("绑定新静态IP", 8, 1200*time.Millisecond, func() error {
@@ -223,14 +296,26 @@ func SwapStaticIPForInstance(ctx context.Context, cli LightsailAPI, instanceName
 		})
 		return err
 	}); err != nil {
-		return err
+		cleanupErr := releaseNewIP(ctx, cli, newName)
+		switch {
+		case errors.Is(cleanupErr, errNewIPAlreadyAttached):
+			return fmt.Errorf("换 IP 可能已成功，请刷新确认：%v", err)
+		case cleanupErr != nil:
+			return fmt.Errorf("绑定静态IP失败：%v（%s 未释放，请手动处理）", err, newName)
+		default:
+			return fmt.Errorf("绑定静态IP失败（新 IP 已回收）：%v", err)
+		}
 	}
 
 	return nil
 }
 
 func DeletePreviousStaticIPOnlyForInstance(ctx context.Context, cli LightsailAPI, instanceName string) (string, error) {
-	oldName, _ := FindAttachedStaticIPName(ctx, cli, instanceName)
+	oldName, _, err := FindAttachedStaticIPName(ctx, cli, instanceName)
+	if err != nil {
+		// 查询失败不能当成「没有静态IP」
+		return "", err
+	}
 	if oldName == "" {
 		return "", nil
 	}
@@ -254,40 +339,60 @@ func DeletePreviousStaticIPOnlyForInstance(ctx context.Context, cli LightsailAPI
 		return "", err
 	}
 
-	// wait deleted
+	// 只有 NotFound 才算释放成功，网络/限流错误不能误判为已消失
 	deadline := time.Now().Add(90 * time.Second)
+	var lastErr error
 	for time.Now().Before(deadline) {
 		_, err := cli.GetStaticIp(ctx, &lightsail.GetStaticIpInput{StaticIpName: &oldName})
 		if err != nil {
-			// not found is enough
-			return oldName, nil
+			if isStaticIPNotFound(err) {
+				return oldName, nil
+			}
+			lastErr = err
 		}
 		time.Sleep(2 * time.Second)
+	}
+	if lastErr != nil {
+		return "", fmt.Errorf("确认静态IP释放失败：%v", lastErr)
 	}
 	return "", fmt.Errorf("旧静态IP仍存在（释放未生效）：%s", oldName)
 }
 
-func FindAttachedStaticIPName(ctx context.Context, cli LightsailAPI, instanceName string) (string, string) {
+// FindAttachedStaticIPName 查询失败必须返回 error，否则会被误判为「没有静态IP」
+func FindAttachedStaticIPName(ctx context.Context, cli LightsailAPI, instanceName string) (string, string, error) {
 	out, err := cli.GetStaticIps(ctx, &lightsail.GetStaticIpsInput{})
-	if err != nil || out == nil {
-		return "", ""
+	if err != nil {
+		if isAccessDenied(err) {
+			return "", "", fmt.Errorf("缺少 lightsail:GetStaticIps 权限：%v", err)
+		}
+		return "", "", fmt.Errorf("查询静态IP列表失败：%v", err)
+	}
+	if out == nil {
+		return "", "", nil
 	}
 	for _, si := range out.StaticIps {
 		if si.AttachedTo != nil && *si.AttachedTo == instanceName {
 			if si.IsAttached == nil || *si.IsAttached {
-				return str(si.Name), str(si.IpAddress)
+				return str(si.Name), str(si.IpAddress), nil
 			}
 		}
 	}
-	return "", ""
+	return "", "", nil
 }
 
 func WaitStaticIPDetached(ctx context.Context, cli LightsailAPI, staticIPName string, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		out, err := cli.GetStaticIp(ctx, &lightsail.GetStaticIpInput{StaticIpName: &staticIPName})
-		if err != nil || out == nil || out.StaticIp == nil {
-			// gone -> detached+released maybe
+		if err != nil {
+			if isStaticIPNotFound(err) {
+				return true // 已不存在
+			}
+			// 其它错误不能当成已解绑，继续等待
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		if out == nil || out.StaticIp == nil {
 			return true
 		}
 		if out.StaticIp.IsAttached != nil && !*out.StaticIp.IsAttached {

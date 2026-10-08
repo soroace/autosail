@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -31,16 +32,20 @@ type LightsailAPI interface {
 	DeleteInstance(context.Context, *lightsail.DeleteInstanceInput, ...func(*lightsail.Options)) (*lightsail.DeleteInstanceOutput, error)
 }
 
-func baseHTTPClient(proxy string) (*http.Client, error) {
+// transportCache 按 proxy 复用 Transport（Keep-Alive 连接池），避免每次请求新建导致连接无法复用
+var transportCache sync.Map // proxy -> *http.Transport
+
+func newTransport(proxy string) (*http.Transport, error) {
 	tr := &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
 		DialContext: (&net.Dialer{
 			Timeout:   10 * time.Second,
 			KeepAlive: 30 * time.Second,
 		}).DialContext,
-		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
-		MaxIdleConns:    50,
-		IdleConnTimeout: 30 * time.Second,
+		TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12},
+		MaxIdleConns:        50,
+		MaxIdleConnsPerHost: 20,
+		IdleConnTimeout:     30 * time.Second,
 	}
 	if proxy != "" {
 		u, err := url.Parse(proxy)
@@ -49,7 +54,20 @@ func baseHTTPClient(proxy string) (*http.Client, error) {
 		}
 		tr.Proxy = http.ProxyURL(u)
 	}
-	return &http.Client{Transport: tr, Timeout: 25 * time.Second}, nil
+	return tr, nil
+}
+
+func baseHTTPClient(proxy string) (*http.Client, error) {
+	if v, ok := transportCache.Load(proxy); ok {
+		return &http.Client{Transport: v.(*http.Transport), Timeout: 25 * time.Second}, nil
+	}
+	tr, err := newTransport(proxy)
+	if err != nil {
+		return nil, err
+	}
+	// 并发下只保留一个
+	actual, _ := transportCache.LoadOrStore(proxy, tr)
+	return &http.Client{Transport: actual.(*http.Transport), Timeout: 25 * time.Second}, nil
 }
 
 func NewLightsailClient(ctx context.Context, region, ak, sk, proxy string) (*lightsail.Client, error) {

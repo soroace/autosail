@@ -775,7 +775,24 @@ func main() {
 		case "delete_ok":
 			data.Flash.Success = "已提交删除（如有静态 IP 已尝试释放）"
 		case "delete_failed":
-			data.Flash.Error = "删除失败（详情看日志）"
+			errMsg := strings.TrimSpace(c.Query("err"))
+			if errMsg != "" {
+				data.Flash.Error = "删除失败：" + errMsg
+			} else {
+				data.Flash.Error = "删除失败（详情看日志）"
+			}
+		case "swapip_ok":
+			data.Flash.Success = "✅ 换 IP 请求已提交"
+		case "swapip_failed":
+			errMsg := strings.TrimSpace(c.Query("err"))
+			switch {
+			case errMsg == "":
+				data.Flash.Error = "换 IP 失败（详情看日志）"
+			case strings.Contains(errMsg, "可能已成功"):
+				data.Flash.Warn = errMsg
+			default:
+				data.Flash.Error = "换 IP 失败：" + errMsg
+			}
 		}
 
 		// manage list
@@ -1448,7 +1465,13 @@ func doManageAction(c *gin.Context, action string, fn func(ctx *gin.Context, cli
 	}
 
 	if err := fn(c, cli, name); err != nil {
-		c.Redirect(http.StatusFound, "/?tab=manage&region="+region+"&msg="+action+"_failed")
+		reason := formatFlashError(err)
+		log.Printf("[manage] action=%s region=%q instance=%q 失败: %v", action, region, name, err)
+		target := "/?tab=manage&region=" + region + "&msg=" + action + "_failed"
+		if reason != "" {
+			target += "&err=" + url.QueryEscape(reason)
+		}
+		c.Redirect(http.StatusFound, target)
 		return
 	}
 
@@ -1493,7 +1516,13 @@ func doManageActionEC2(c *gin.Context, action string, fn func(ctx *gin.Context, 
 	}
 
 	if err := fn(c, cli, id); err != nil {
-		c.Redirect(http.StatusFound, "/?tab=manage&region="+region+"&msg="+action+"_failed&service=ec2")
+		reason := formatFlashError(err)
+		log.Printf("[manage-ec2] action=%s region=%q instance=%q 失败: %v", action, region, id, err)
+		target := "/?tab=manage&region=" + region + "&msg=" + action + "_failed&service=ec2"
+		if reason != "" {
+			target += "&err=" + url.QueryEscape(reason)
+		}
+		c.Redirect(http.StatusFound, target)
 		return
 	}
 
