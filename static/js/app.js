@@ -212,11 +212,16 @@
 })();
 
 // -------------------- 实例列表静默刷新 --------------------
-// 存在过渡态实例时每 12s 静默刷新（间隔需大于服务端 10s 实例缓存）
+// 存在过渡态实例时静默刷新，间隔由服务端按缓存时长注入（见 main.go instPollIntervalMS）
 (function(){
   const TRANSITIONAL = ['pending', 'stopping', 'shutting-down'];
-  const POLL_MS = 12000;
+  const POLL_MS = Number(document.body.dataset.instPollMs) || 12000;
   let inFlight = false;
+  const MAX_POLLS = Math.ceil(60000 / POLL_MS); // 单轮过渡态最多自动刷新约 1 分钟
+  let pollCount = 0;
+
+  // 用户手动操作（刷新/重启等）后重新给一轮预算
+  window.__instPollReset = function(){ pollCount = 0; };
 
   function hasTransitional(){
     return Array.from(document.querySelectorAll('[data-state]')).some((el) =>
@@ -257,7 +262,10 @@
     if(document.visibilityState !== 'visible') return;          // 后台标签页不请求
     if(document.querySelector('.custom-confirm-mask.is-open')) return; // 确认弹窗打开时不刷
     if(!document.getElementById('tab-root')) return;
-    if(hasTransitional()) silentRefresh();
+    if(!hasTransitional()){ pollCount = 0; return; }            // 回到稳定态即重置预算
+    if(pollCount >= MAX_POLLS) return;                          // 超预算不再请求
+    pollCount++;
+    silentRefresh();
   }, POLL_MS);
 })();
 
@@ -424,6 +432,7 @@ async function copyText(text){
       const newTabRoot = doc.getElementById('tab-root');
       const currentTabRoot = document.getElementById('tab-root');
       if(newTabRoot && currentTabRoot) currentTabRoot.replaceWith(newTabRoot);
+      if(window.__instPollReset) window.__instPollReset();
       const newFlashRoot = doc.getElementById('flash-root');
       const currentFlashRoot = document.getElementById('flash-root');
       if(newFlashRoot && currentFlashRoot){

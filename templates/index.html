@@ -1,3 +1,6 @@
+{{/* 实例状态徽章：两处实例列表共用；data-state 供前端静默刷新读取 */}}
+{{define "stateBadge"}}<span data-state="{{.State}}" class="inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-bold ring-1 ring-inset {{if eq .State "running"}}bg-emerald-50 text-emerald-700 ring-emerald-600/20{{else}}bg-slate-100 text-slate-600 ring-slate-500/20{{end}}">{{if eq .State "running"}}● Running{{else}}○ {{.State}}{{end}}</span>{{end}}
+
 {{define "index"}}
 <div id="tab-root" class="space-y-8 animate-fade-in pb-10">
 
@@ -328,9 +331,7 @@
                       <div class="flex-1 min-w-0">
                         <div class="flex items-center gap-3 mb-3">
                           <div class="font-extrabold text-slate-800 text-base truncate">{{.Name}}</div>
-                          <span data-state="{{.State}}" class="inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-bold ring-1 ring-inset {{if eq .State "running"}}bg-emerald-50 text-emerald-700 ring-emerald-600/20{{else}}bg-slate-100 text-slate-600 ring-slate-500/20{{end}}">
-                            {{if eq .State "running"}}● Running{{else}}○ {{.State}}{{end}}
-                          </span>
+                          {{template "stateBadge" .}}
                           <span class="text-[10px] text-slate-400 border border-slate-200 rounded px-1.5 py-0.5 bg-slate-50 font-mono">{{.BundleID}}</span>
                         </div>
 
@@ -379,9 +380,7 @@
                               <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
                            </div>
                           <div class="font-extrabold text-slate-800 text-base truncate">{{if .Name}}{{.Name}}{{else}}{{.ID}}{{end}}</div>
-                          <span data-state="{{.State}}" class="inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-bold ring-1 ring-inset {{if eq .State "running"}}bg-emerald-50 text-emerald-700 ring-emerald-600/20{{else}}bg-slate-100 text-slate-600 ring-slate-500/20{{end}}">
-                            {{if eq .State "running"}}● Running{{else}}○ {{.State}}{{end}}
-                          </span>
+                          {{template "stateBadge" .}}
                         </div>
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-y-2 gap-x-8 text-xs font-mono">
                           <div class="flex items-center gap-2 group/ip">

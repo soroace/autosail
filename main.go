@@ -120,11 +120,20 @@ func formatFlashError(err error) string {
 	return msg
 }
 
+const (
+	instCacheTTL   = 10 * time.Second // 实例列表缓存时长
+	instPollMargin = 2 * time.Second  // 前端轮询需略大于缓存时长
+)
+
 var (
-	// cache instances list for 10s
-	instCache = cache.New(10*time.Second, 30*time.Second)
+	instCache = cache.New(instCacheTTL, 30*time.Second)
 	appStore  *store.Store
 )
+
+// instPollIntervalMS 前端静默刷新间隔，由缓存时长推导，避免前后端各自硬编码而脱节
+func instPollIntervalMS() int {
+	return int((instCacheTTL + instPollMargin) / time.Millisecond)
+}
 
 //go:embed templates/*.html
 var templateFS embed.FS
@@ -373,6 +382,7 @@ func main() {
 	// templates
 	tmpl := template.Must(template.New("").Funcs(template.FuncMap{
 		"regionLabel": regionLabel,
+		"instPollMS":  instPollIntervalMS,
 	}).ParseFS(templateFS, "templates/*.html"))
 	r.SetHTMLTemplate(tmpl)
 
