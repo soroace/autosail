@@ -18,5 +18,6 @@ func SafeRetry(actionName string, retries int, baseSleep time.Duration, fn func(
 		}
 		time.Sleep(time.Duration(float64(baseSleep) * (1.0 + float64(i)*0.35)))
 	}
-	return fmt.Errorf("%s 失败：%v", actionName, last)
+	// %w 保留错误链，下游才能用 errors.Is/As 判断错误码
+	return fmt.Errorf("%s 失败：%w", actionName, last)
 }

@@ -18,6 +18,8 @@ type fakeLightsail struct {
 	staticIPs       []types.StaticIp
 	getStaticIPsErr error
 	getStaticIP     func(name string) (*types.StaticIp, error)
+	attachErr       error
+	releaseErr      error
 	calls           []string
 }
 
@@ -64,6 +66,9 @@ func (f *fakeLightsail) DetachStaticIp(context.Context, *lightsail.DetachStaticI
 
 func (f *fakeLightsail) ReleaseStaticIp(context.Context, *lightsail.ReleaseStaticIpInput, ...func(*lightsail.Options)) (*lightsail.ReleaseStaticIpOutput, error) {
 	f.record("ReleaseStaticIp")
+	if f.releaseErr != nil {
+		return nil, f.releaseErr
+	}
 	return &lightsail.ReleaseStaticIpOutput{}, nil
 }
 
@@ -74,6 +79,9 @@ func (f *fakeLightsail) AllocateStaticIp(context.Context, *lightsail.AllocateSta
 
 func (f *fakeLightsail) AttachStaticIp(context.Context, *lightsail.AttachStaticIpInput, ...func(*lightsail.Options)) (*lightsail.AttachStaticIpOutput, error) {
 	f.record("AttachStaticIp")
+	if f.attachErr != nil {
+		return nil, f.attachErr
+	}
 	return &lightsail.AttachStaticIpOutput{}, nil
 }
 
@@ -213,8 +221,8 @@ func TestReleaseNewIPChecksStateBeforeReleasing(t *testing.T) {
 		}}
 
 		err := releaseNewIP(context.Background(), f, "sip-x")
-		if !errors.Is(err, errNewIPAlreadyAttached) {
-			t.Fatalf("已绑定的 IP 应返回 errNewIPAlreadyAttached，实际: %v", err)
+		if !errors.Is(err, ErrNewIPAlreadyAttached) {
+			t.Fatalf("已绑定的 IP 应返回 ErrNewIPAlreadyAttached，实际: %v", err)
 		}
 		if f.called("ReleaseStaticIp") {
 			t.Fatal("已绑定的 IP 绝不能释放")
@@ -244,5 +252,78 @@ func TestWaitStaticIPDetachedDoesNotTreatErrorsAsGone(t *testing.T) {
 	// 超时很短，函数应返回 false（不能因为报错就当作已解绑）
 	if WaitStaticIPDetached(context.Background(), f, "sip-old", 10*time.Millisecond) {
 		t.Fatal("网络错误不能被当成“已解绑”")
+	}
+}
+
+// fastRetry 把静态IP重试参数压到最小，避免测试在失败路径上等待
+func fastRetry(t *testing.T) {
+	t.Helper()
+	restore := staticIPRetry
+	staticIPRetry.Alloc, staticIPRetry.Attach, staticIPRetry.Release, staticIPRetry.Sleep = 1, 1, 1, 0
+	t.Cleanup(func() { staticIPRetry = restore })
+}
+
+// 绑定请求返回失败、但 IP 实际已绑定：必须保留哨兵身份供上层 errors.Is 判断，且不能释放该 IP
+func TestSwapStaticIPKeepsSentinelWhenActuallyAttached(t *testing.T) {
+	fastRetry(t)
+	f := &fakeLightsail{
+		instances: []types.Instance{{Name: strPtr("vps1"), PublicIpAddress: strPtr("203.0.113.10")}},
+		attachErr: errors.New("connection reset by peer"),
+		getStaticIP: func(string) (*types.StaticIp, error) {
+			return &types.StaticIp{IsAttached: boolPtr(true)}, nil
+		},
+	}
+
+	err := SwapStaticIPForInstance(context.Background(), f, "vps1")
+	if err == nil {
+		t.Fatal("绑定失败时应返回错误")
+	}
+	if !errors.Is(err, ErrNewIPAlreadyAttached) {
+		t.Fatalf("应保留哨兵身份，实际: %v", err)
+	}
+	if f.called("ReleaseStaticIp") {
+		t.Fatal("实际已绑定的 IP 不能被释放")
+	}
+}
+
+// 释放旧 IP 时返回 NotFound（上一次实际成功、响应丢失）：应视为释放成功而非失败
+func TestReleaseNotFoundTreatedAsSuccess(t *testing.T) {
+	f := &fakeLightsail{
+		staticIPs:  []types.StaticIp{{Name: strPtr("sip-old"), AttachedTo: strPtr("vps1"), IsAttached: boolPtr(true)}},
+		releaseErr: notFoundErr(),
+		getStaticIP: func(string) (*types.StaticIp, error) {
+			return nil, notFoundErr()
+		},
+	}
+
+	name, err := DeletePreviousStaticIPOnlyForInstance(context.Background(), f, "vps1")
+	if err != nil {
+		t.Fatalf("NotFound 应视为释放成功，实际报错: %v", err)
+	}
+	if name != "sip-old" {
+		t.Fatalf("应返回已释放的 IP 名，实际: %q", name)
+	}
+}
+
+// 绑定失败且 IP 未绑定：应回收该 IP，并返回普通失败
+func TestSwapStaticIPReleasesWhenAttachFailed(t *testing.T) {
+	fastRetry(t)
+	f := &fakeLightsail{
+		instances: []types.Instance{{Name: strPtr("vps1"), PublicIpAddress: strPtr("203.0.113.10")}},
+		attachErr: errors.New("connection reset by peer"),
+		getStaticIP: func(string) (*types.StaticIp, error) {
+			return &types.StaticIp{IsAttached: boolPtr(false)}, nil
+		},
+	}
+
+	err := SwapStaticIPForInstance(context.Background(), f, "vps1")
+	if err == nil {
+		t.Fatal("绑定失败时应返回错误")
+	}
+	if errors.Is(err, ErrNewIPAlreadyAttached) {
+		t.Fatal("IP 未绑定时不应返回哨兵错误")
+	}
+	if !f.called("ReleaseStaticIp") {
+		t.Fatal("未绑定的新 IP 应被回收")
 	}
 }

@@ -783,15 +783,14 @@ func main() {
 			}
 		case "swapip_ok":
 			data.Flash.Success = "✅ 换 IP 请求已提交"
+		case "swapip_attached":
+			data.Flash.Warn = "换 IP 可能已成功，请刷新确认"
 		case "swapip_failed":
 			errMsg := strings.TrimSpace(c.Query("err"))
-			switch {
-			case errMsg == "":
-				data.Flash.Error = "换 IP 失败（详情看日志）"
-			case strings.Contains(errMsg, "可能已成功"):
-				data.Flash.Warn = errMsg
-			default:
+			if errMsg != "" {
 				data.Flash.Error = "换 IP 失败：" + errMsg
+			} else {
+				data.Flash.Error = "换 IP 失败（详情看日志）"
 			}
 		}
 
@@ -1464,9 +1463,17 @@ func doManageAction(c *gin.Context, action string, fn func(ctx *gin.Context, cli
 		return
 	}
 
+	cacheKey := strings.Join([]string{"inst", region, ak, proxy}, "|")
+
 	if err := fn(c, cli, name); err != nil {
-		reason := formatFlashError(err)
 		log.Printf("[manage] action=%s region=%q instance=%q 失败: %v", action, region, name, err)
+		// 换 IP 实际已成功（响应丢失）：按提示处理，不当作失败
+		if errors.Is(err, aws.ErrNewIPAlreadyAttached) {
+			instCache.Delete(cacheKey)
+			c.Redirect(http.StatusFound, "/?tab=manage&region="+region+"&msg=swapip_attached")
+			return
+		}
+		reason := formatFlashError(err)
 		target := "/?tab=manage&region=" + region + "&msg=" + action + "_failed"
 		if reason != "" {
 			target += "&err=" + url.QueryEscape(reason)
@@ -1476,8 +1483,7 @@ func doManageAction(c *gin.Context, action string, fn func(ctx *gin.Context, cli
 	}
 
 	// invalidate cache
-	key := strings.Join([]string{"inst", region, ak, proxy}, "|")
-	instCache.Delete(key)
+	instCache.Delete(cacheKey)
 
 	c.Redirect(http.StatusFound, "/?tab=manage&region="+region+"&msg="+action+"_ok")
 }
