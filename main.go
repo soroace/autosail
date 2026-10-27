@@ -654,7 +654,7 @@ func main() {
 		// Create UI defaults (persist in session)
 		createIPType := s.GetString("create_ip_type", "dualstack")
 		createBlueprint := s.GetString("create_blueprint", "ubuntu_24_04")
-		createBundle := s.GetString("create_bundle", "nano_3_0")
+		createBundle := s.GetString("create_bundle", "nano_3_2")
 		createFW := s.GetString("create_fw_all", "1") == "1"
 		createService := s.GetString("create_service", "lightsail")
 		manageService := s.GetString("manage_service", "lightsail")
