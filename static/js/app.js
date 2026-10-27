@@ -272,9 +272,11 @@
 // -------------------- 套餐按区域动态拉取 --------------------
 // Lightsail 套餐 ID 会换代（_3_0 → _3_2）且各区域不同，硬编码列表过期会导致创建时报 NotFoundException
 (function(){
+  const MAX_OPTIONS = 5;    // 默认最多显示 5 个套餐（按价格升序），其余折叠
   let bundles = null;       // 上次拉取的完整列表（含 ipv6 标记）
   let attemptedRegion = ''; // 已尝试过的区域，避免重复请求
   let loading = false;
+  let expanded = false;     // 是否已展开全部套餐
 
   function createForm(){ return document.querySelector('form[action="/aws/create"]'); }
 
@@ -286,20 +288,28 @@
     if(!bundleSel) return;
 
     const wantIPv6 = !!(ipTypeSel && ipTypeSel.value === 'ipv6');
-    const list = bundles.filter((b) => !!b.ipv6 === wantIPv6);
-    if(!list.length) return;
+    const all = bundles.filter((b) => !!b.ipv6 === wantIPv6);
+    if(!all.length) return;
 
+    const shown = expanded ? all : all.slice(0, MAX_OPTIONS);
     const prev = bundleSel.value;
     const frag = document.createDocumentFragment();
-    list.forEach((b) => {
+    shown.forEach((b) => {
       const opt = document.createElement('option');
       opt.value = b.id;
       opt.textContent = b.name + ' - ' + b.id;   // textContent 防注入
       frag.appendChild(opt);
     });
+    // 超出上限时给一个“展开全部”的入口
+    if(!expanded && all.length > MAX_OPTIONS){
+      const more = document.createElement('option');
+      more.value = '__more__';
+      more.textContent = '—— 显示全部 ' + all.length + ' 个套餐 ——';
+      frag.appendChild(more);
+    }
     bundleSel.innerHTML = '';
     bundleSel.appendChild(frag);
-    if(list.some((b) => b.id === prev)) bundleSel.value = prev;
+    if(shown.some((b) => b.id === prev)) bundleSel.value = prev;
   }
 
   async function load(region){
@@ -309,6 +319,7 @@
       return;
     }
     attemptedRegion = region;
+    expanded = false; // 换区域后重新从折叠状态开始
     loading = true;
     try{
       const r = await fetch('/aws/bundles?region=' + encodeURIComponent(region));
@@ -329,6 +340,7 @@
     if(!f || !f.contains(el)) return;
     if(el.name === 'region') load(el.value);
     else if(el.name === 'ip_type') render();
+    else if(el.name === 'bundle_id' && el.value === '__more__'){ expanded = true; render(); }
   });
 
   // 首次进入 / 切回创建页时自动拉取
