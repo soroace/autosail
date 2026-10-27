@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +26,96 @@ type InstanceView struct {
 	Zone       string
 	BundleID   string
 	Created    string
+}
+
+// BundleView 套餐信息（ID 里的代次/修订号由 AWS 按区域决定，不能写死）
+type BundleView struct {
+	ID       string
+	Base     string // 去掉 "_代次_修订" 的基础名，如 micro / micro_ipv6
+	TypeName string // 规格名，如 micro
+	IPv6     bool   // 是否 IPv6 专用套餐
+	Windows  bool
+	CPU      int32
+	RAM      float64
+	Disk     int32
+	Transfer int32
+	Price    float64
+}
+
+// BundleBase 去掉套餐 ID 末尾的 "_代次_修订"：micro_ipv6_3_2 → micro_ipv6
+func BundleBase(id string) string {
+	parts := strings.Split(id, "_")
+	n := len(parts)
+	if n >= 3 && isAllDigits(parts[n-1]) && isAllDigits(parts[n-2]) {
+		return strings.Join(parts[:n-2], "_")
+	}
+	return id
+}
+
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// ListBundles 拉取当前区域实际可用的套餐
+func ListBundles(ctx context.Context, cli LightsailAPI) ([]BundleView, error) {
+	out, err := cli.GetBundles(ctx, &lightsail.GetBundlesInput{})
+	if err != nil {
+		return nil, fmt.Errorf("拉取套餐失败：%v", err)
+	}
+
+	var list []BundleView
+	for _, b := range out.Bundles {
+		id := str(b.BundleId)
+		if id == "" || (b.IsActive != nil && !*b.IsActive) {
+			continue
+		}
+		windows := strings.Contains(id, "_win_")
+		for _, p := range b.SupportedPlatforms {
+			if p == types.InstancePlatformWindows {
+				windows = true
+			}
+		}
+		bv := BundleView{
+			ID:       id,
+			Base:     BundleBase(id),
+			TypeName: str(b.InstanceType),
+			IPv6:     strings.Contains(id, "_ipv6_"),
+			Windows:  windows,
+		}
+		if b.CpuCount != nil {
+			bv.CPU = *b.CpuCount
+		}
+		if b.RamSizeInGb != nil {
+			bv.RAM = float64(*b.RamSizeInGb)
+		}
+		if b.DiskSizeInGb != nil {
+			bv.Disk = *b.DiskSizeInGb
+		}
+		if b.TransferPerMonthInGb != nil {
+			bv.Transfer = *b.TransferPerMonthInGb
+		}
+		if b.Price != nil {
+			bv.Price = float64(*b.Price)
+		}
+		list = append(list, bv)
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].Price < list[j].Price })
+	return list, nil
+}
+
+// BundleLabel 生成下拉框显示文本
+func BundleLabel(b BundleView) string {
+	ram := strconv.FormatFloat(b.RAM, 'f', -1, 64)
+	return fmt.Sprintf("%s (%d vCPU, %s GB 内存, %d GB 硬盘, %d GB 流量/月)",
+		b.TypeName, b.CPU, ram, b.Disk, b.Transfer)
 }
 
 func ListInstances(ctx context.Context, cli LightsailAPI) ([]InstanceView, error) {

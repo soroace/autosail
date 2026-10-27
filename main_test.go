@@ -109,3 +109,63 @@ func TestLoginTemplateRenders(t *testing.T) {
 		t.Fatalf("渲染 login 失败: %v", err)
 	}
 }
+
+// 界面只展示 5 个常用规格（过滤 Windows / IPv6 专用 / 超大规格），顺序固定
+func TestPickStandardBundles(t *testing.T) {
+	list := []aws.BundleView{
+		{ID: "large_3_2", TypeName: "large"},
+		{ID: "nano_3_2", TypeName: "nano"},
+		{ID: "micro_win_3_2", TypeName: "micro", Windows: true},
+		{ID: "micro_3_2", TypeName: "micro"},
+		{ID: "medium_3_2", TypeName: "medium"},
+		{ID: "small_3_2", TypeName: "small"},
+		{ID: "nano_ipv6_3_2", TypeName: "nano", IPv6: true},
+		{ID: "xlarge_3_2", TypeName: "xlarge"},
+	}
+
+	got := pickStandardBundles(list)
+	want := []string{"nano_3_2", "micro_3_2", "small_3_2", "medium_3_2", "large_3_2"}
+	if len(got) != len(want) {
+		t.Fatalf("应返回 %d 个常用规格，实际 %d: %+v", len(want), len(got), got)
+	}
+	for i := range want {
+		if got[i].ID != want[i] {
+			t.Fatalf("第 %d 项应为 %s，实际 %s", i+1, want[i], got[i].ID)
+		}
+	}
+}
+
+// 仅 IPv6 时按基础名找到该区域的 IPv6 专用套餐
+func TestIpv6BundleID(t *testing.T) {
+	list := []aws.BundleView{
+		{ID: "micro_3_2", Base: "micro", TypeName: "micro"},
+		{ID: "micro_ipv6_3_2", Base: "micro_ipv6", TypeName: "micro", IPv6: true},
+		{ID: "nano_ipv6_3_1", Base: "nano_ipv6", TypeName: "nano", IPv6: true},
+	}
+
+	if id, ok := ipv6BundleID(list, "micro_3_2"); !ok || id != "micro_ipv6_3_2" {
+		t.Fatalf("micro 的 IPv6 套餐应为 micro_ipv6_3_2，实际 %q ok=%v", id, ok)
+	}
+	if _, ok := ipv6BundleID(list, "large_3_2"); ok {
+		t.Fatal("不存在的规格不应匹配到 IPv6 套餐")
+	}
+}
+
+// 提交时纠正区域与套餐不匹配（跨代次按基础名映射）
+func TestBundleForRegion(t *testing.T) {
+	list := []aws.BundleView{
+		{ID: "micro_3_1", Base: "micro", TypeName: "micro"},
+		{ID: "micro_ipv6_3_1", Base: "micro_ipv6", TypeName: "micro", IPv6: true},
+		{ID: "nano_3_1", Base: "nano", TypeName: "nano"},
+	}
+
+	if id, ok := bundleForRegion(list, "nano_3_1"); !ok || id != "nano_3_1" {
+		t.Fatalf("精确命中失败: %q ok=%v", id, ok)
+	}
+	if id, ok := bundleForRegion(list, "micro_3_2"); !ok || id != "micro_3_1" {
+		t.Fatalf("跨代次应映射到 micro_3_1，实际 %q ok=%v", id, ok)
+	}
+	if _, ok := bundleForRegion(list, "large_3_2"); ok {
+		t.Fatal("区域没有的规格不应映射成功")
+	}
+}

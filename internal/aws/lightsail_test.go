@@ -16,6 +16,7 @@ import (
 type fakeLightsail struct {
 	instances       []types.Instance
 	staticIPs       []types.StaticIp
+	bundles         []types.Bundle
 	getStaticIPsErr error
 	getStaticIP     func(name string) (*types.StaticIp, error)
 	attachErr       error
@@ -37,6 +38,11 @@ func (f *fakeLightsail) called(name string) bool {
 func (f *fakeLightsail) GetInstances(context.Context, *lightsail.GetInstancesInput, ...func(*lightsail.Options)) (*lightsail.GetInstancesOutput, error) {
 	f.record("GetInstances")
 	return &lightsail.GetInstancesOutput{Instances: f.instances}, nil
+}
+
+func (f *fakeLightsail) GetBundles(context.Context, *lightsail.GetBundlesInput, ...func(*lightsail.Options)) (*lightsail.GetBundlesOutput, error) {
+	f.record("GetBundles")
+	return &lightsail.GetBundlesOutput{Bundles: f.bundles}, nil
 }
 
 func (f *fakeLightsail) GetStaticIps(context.Context, *lightsail.GetStaticIpsInput, ...func(*lightsail.Options)) (*lightsail.GetStaticIpsOutput, error) {
@@ -241,6 +247,67 @@ func TestReleaseNewIPChecksStateBeforeReleasing(t *testing.T) {
 			t.Fatal("未绑定的新 IP 应被释放")
 		}
 	})
+}
+
+// 套餐解析：跳过未激活、标记 Windows/IPv6、解析规格与基础名
+func TestListBundlesParses(t *testing.T) {
+	cpu, ram, disk, transfer := int32(2), float32(1), int32(40), int32(2048)
+	price := float32(7)
+	f := &fakeLightsail{bundles: []types.Bundle{
+		{
+			BundleId: strPtr("micro_3_2"), InstanceType: strPtr("micro"), CpuCount: &cpu,
+			RamSizeInGb: &ram, DiskSizeInGb: &disk, TransferPerMonthInGb: &transfer, Price: &price,
+			IsActive:           boolPtr(true),
+			SupportedPlatforms: []types.InstancePlatform{types.InstancePlatformLinuxUnix},
+		},
+		{
+			BundleId: strPtr("micro_win_3_2"), InstanceType: strPtr("micro"), IsActive: boolPtr(true),
+			SupportedPlatforms: []types.InstancePlatform{types.InstancePlatformWindows},
+		},
+		{BundleId: strPtr("micro_ipv6_3_2"), InstanceType: strPtr("micro"), IsActive: boolPtr(true)},
+		{BundleId: strPtr("old_3_0"), InstanceType: strPtr("old"), IsActive: boolPtr(false)}, // 未激活应跳过
+	}}
+
+	list, err := ListBundles(context.Background(), f)
+	if err != nil {
+		t.Fatalf("ListBundles 返回错误: %v", err)
+	}
+	if len(list) != 3 {
+		t.Fatalf("应返回 3 个套餐（跳过未激活），实际 %d", len(list))
+	}
+
+	byID := map[string]BundleView{}
+	for _, b := range list {
+		byID[b.ID] = b
+	}
+	micro := byID["micro_3_2"]
+	if micro.Base != "micro" || micro.TypeName != "micro" || micro.IPv6 || micro.Windows || micro.CPU != 2 || micro.RAM != 1 {
+		t.Fatalf("micro_3_2 解析错误: %+v", micro)
+	}
+	if !byID["micro_win_3_2"].Windows {
+		t.Fatal("Windows 套餐应被标记")
+	}
+	if !byID["micro_ipv6_3_2"].IPv6 || byID["micro_ipv6_3_2"].Base != "micro_ipv6" {
+		t.Fatalf("IPv6 套餐解析错误: %+v", byID["micro_ipv6_3_2"])
+	}
+	if !strings.Contains(BundleLabel(micro), "micro") {
+		t.Fatalf("显示名异常: %q", BundleLabel(micro))
+	}
+}
+
+// 套餐基础名：去掉 "_代次_修订"
+func TestBundleBase(t *testing.T) {
+	cases := map[string]string{
+		"micro_3_2":      "micro",
+		"micro_ipv6_3_1": "micro_ipv6",
+		"nano_2_0":       "nano",
+		"weird":          "weird",
+	}
+	for in, want := range cases {
+		if got := BundleBase(in); got != want {
+			t.Fatalf("BundleBase(%q) = %q, want %q", in, got, want)
+		}
+	}
 }
 
 // 只有 NotFound 才算已消失，网络错误不能误判成功

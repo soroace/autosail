@@ -127,7 +127,9 @@ const (
 
 var (
 	instCache = cache.New(instCacheTTL, 30*time.Second)
-	appStore  *store.Store
+	// 套餐列表按区域缓存 10 分钟（同一区域基本不变，避免每次打开创建页都调 API）
+	bundleCache = cache.New(10*time.Minute, 30*time.Minute)
+	appStore    *store.Store
 )
 
 // instPollIntervalMS 前端静默刷新间隔，由缓存时长推导，避免前后端各自硬编码而脱节
@@ -244,12 +246,13 @@ var blueprintOptions = []Option{
 	{ID: "centos_7", Name: "CentOS 7"},
 }
 
+// bundleOptions 动态获取失败时的兜底列表
 var bundleOptions = []Option{
-	{ID: "nano_3_0", Name: "nano (2 vCPUs, 内存 0.5 GB, 硬盘 20 GB, 流量 1024 GB / 月)"},
-	{ID: "micro_3_0", Name: "micro (2 vCPUs, 内存 1 GB, 硬盘 40 GB, 流量 2048 GB / 月)"},
-	{ID: "small_3_0", Name: "small (2 vCPUs, 内存 2 GB, 硬盘 60 GB, 流量 3072 GB / 月)"},
-	{ID: "medium_3_0", Name: "medium (2 vCPUs, 内存 4 GB, 硬盘 80 GB, 流量 4096 GB / 月)"},
-	{ID: "large_3_0", Name: "large (2 vCPUs, 内存 8 GB, 硬盘 160 GB, 流量 5120 GB / 月)"},
+	{ID: "nano_3_2", Name: "nano (2 vCPUs, 内存 0.5 GB, 硬盘 20 GB, 流量 1024 GB / 月)"},
+	{ID: "micro_3_2", Name: "micro (2 vCPUs, 内存 1 GB, 硬盘 40 GB, 流量 2048 GB / 月)"},
+	{ID: "small_3_2", Name: "small (2 vCPUs, 内存 2 GB, 硬盘 60 GB, 流量 3072 GB / 月)"},
+	{ID: "medium_3_2", Name: "medium (2 vCPUs, 内存 4 GB, 硬盘 80 GB, 流量 4096 GB / 月)"},
+	{ID: "large_3_2", Name: "large (2 vCPUs, 内存 8 GB, 硬盘 160 GB, 流量 5120 GB / 月)"},
 }
 
 var ipTypeOptions = []Option{
@@ -295,12 +298,85 @@ var ec2InstanceTypes = []Option{
 	{ID: "custom", Name: "自定义实例类型"},
 }
 
+// ipv6BundleMap 仅在动态获取失败时兜底使用
 var ipv6BundleMap = map[string]string{
-	"nano_3_0":   "nano_ipv6_3_0",
-	"micro_3_0":  "micro_ipv6_3_0",
-	"small_3_0":  "small_ipv6_3_0",
-	"medium_3_0": "medium_ipv6_3_0",
-	"large_3_0":  "large_ipv6_3_0",
+	"nano_3_2":   "nano_ipv6_3_2",
+	"micro_3_2":  "micro_ipv6_3_2",
+	"small_3_2":  "small_ipv6_3_2",
+	"medium_3_2": "medium_ipv6_3_2",
+	"large_3_2":  "large_ipv6_3_2",
+}
+
+// standardBundleSizes 界面只展示这些常用规格（更大的规格用不到）
+var standardBundleSizes = []string{"nano", "micro", "small", "medium", "large"}
+
+// pickStandardBundles 从区域套餐里挑出常用规格（Linux 标准网络），按固定顺序返回
+func pickStandardBundles(list []aws.BundleView) []aws.BundleView {
+	byType := map[string]aws.BundleView{}
+	for _, b := range list {
+		if b.Windows || b.IPv6 {
+			continue
+		}
+		if _, ok := byType[b.TypeName]; !ok {
+			byType[b.TypeName] = b
+		}
+	}
+	out := make([]aws.BundleView, 0, len(standardBundleSizes))
+	for _, t := range standardBundleSizes {
+		if b, ok := byType[t]; ok {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
+// regionBundles 取该区域套餐列表（缓存 10 分钟）；失败返回 nil
+func regionBundles(ctx context.Context, region, ak, sk, proxy string) []aws.BundleView {
+	cacheKey := strings.Join([]string{"bundles", region, ak, proxy}, "|")
+	if v, ok := bundleCache.Get(cacheKey); ok {
+		return v.([]aws.BundleView)
+	}
+	cli, err := aws.NewLightsailClient(ctx, region, ak, sk, proxy)
+	if err != nil {
+		return nil
+	}
+	list, err := aws.ListBundles(ctx, cli)
+	if err != nil {
+		return nil
+	}
+	bundleCache.Set(cacheKey, list, cache.DefaultExpiration)
+	return list
+}
+
+// ipv6BundleID 找该区域同规格的 IPv6 专用套餐 ID（基础名要补上 "_ipv6" 再比较）
+func ipv6BundleID(list []aws.BundleView, bundleID string) (string, bool) {
+	want := aws.BundleBase(bundleID)
+	if !strings.HasSuffix(want, "_ipv6") {
+		want += "_ipv6"
+	}
+	for _, b := range list {
+		if b.IPv6 && b.Base == want {
+			return b.ID, true
+		}
+	}
+	return "", false
+}
+
+// bundleForRegion 把提交的套餐 ID 映射成该区域真实存在的等价套餐。
+// 用户在创建页改了区域但页面没刷新时，套餐列表还是旧区域的，这里做一次纠正。
+func bundleForRegion(list []aws.BundleView, bundleID string) (string, bool) {
+	for _, b := range list {
+		if b.ID == bundleID {
+			return b.ID, true
+		}
+	}
+	base := aws.BundleBase(bundleID)
+	for _, b := range list {
+		if !b.IPv6 && !b.Windows && b.Base == base {
+			return b.ID, true
+		}
+	}
+	return "", false
 }
 
 func regionLabel(id string) string {
@@ -654,20 +730,40 @@ func main() {
 		// Create UI defaults (persist in session)
 		createIPType := s.GetString("create_ip_type", "dualstack")
 		createBlueprint := s.GetString("create_blueprint", "ubuntu_24_04")
-		createBundle := s.GetString("create_bundle", "nano_3_0")
+		createBundle := s.GetString("create_bundle", "nano_3_2")
 		createFW := s.GetString("create_fw_all", "1") == "1"
 		createService := s.GetString("create_service", "lightsail")
 		manageService := s.GetString("manage_service", "lightsail")
 		createEC2AMI := s.GetString("create_ec2_ami", "ubuntu-22.04")
 		createEC2Type := s.GetString("create_ec2_type", "t3.micro")
 		createEC2IPv6 := s.GetString("create_ec2_ipv6", "0") == "1"
-		createBundleName := findOptionName(bundleOptions, createBundle)
 		createRegions := regionOptionsForService(createService)
 		manageRegions := regionOptionsForService(manageService)
 
 		activeAK := strings.TrimSpace(keyAccessKey(activeKey))
 		activeProxy := strings.TrimSpace(keyProxy(activeKey))
 		activeHasCreds := activeKey != nil && activeAK != "" && strings.TrimSpace(activeKey.SecretKey) != ""
+
+		// 套餐：按区域动态获取（只保留 5 个常用规格），失败回退硬编码列表。
+		// 各区域套餐代次/修订号不同（_3_0/_3_1/_3_2），写死 ID 必然在某些区域失效。
+		createBundles := bundleOptions
+		if createService == "lightsail" && activeHasCreds {
+			ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+			picked := pickStandardBundles(regionBundles(ctx, region, activeAK, strings.TrimSpace(activeKey.SecretKey), activeProxy))
+			cancel()
+			if len(picked) > 0 {
+				opts := make([]Option, 0, len(picked))
+				for _, b := range picked {
+					opts = append(opts, Option{ID: b.ID, Name: aws.BundleLabel(b)})
+				}
+				createBundles = opts
+				// 记住的套餐不属于本区域时，默认选第一档
+				if findOptionName(opts, createBundle) == "" {
+					createBundle = opts[0].ID
+				}
+			}
+		}
+		createBundleName := findOptionName(createBundles, createBundle)
 
 		data := PageData{
 			Title:            "AutoSail",
@@ -700,7 +796,7 @@ func main() {
 			CreateEC2IPv6:    createEC2IPv6,
 			CreateBundleName: createBundleName,
 			Blueprints:       blueprintOptions,
-			Bundles:          bundleOptions,
+			Bundles:          createBundles,
 			IPTypes:          ipTypeOptions,
 			EC2AMIs:          ec2AMIOptions,
 			EC2Types:         ec2InstanceTypes,
@@ -1202,6 +1298,14 @@ func main() {
 
 		blueprint := strings.TrimSpace(c.PostForm("blueprint_id"))
 		bundle := strings.TrimSpace(c.PostForm("bundle_id"))
+		// 纠正区域与套餐不匹配（用户改了区域但页面没刷新时，套餐列表还是旧区域的）
+		if bundle != "" {
+			if list := regionBundles(c.Request.Context(), region, ak, sk, proxy); len(list) > 0 {
+				if id, ok := bundleForRegion(list, bundle); ok {
+					bundle = id
+				}
+			}
+		}
 		if blueprint != "" {
 			s.SetString("create_blueprint", blueprint)
 		}
@@ -1225,10 +1329,12 @@ func main() {
 		}
 		userData := aws.BuildRootPasswordUserData(rootPwd)
 
-		// If ipv6-only, use ipv6 bundle encoding (Lightsail real bundle id)
+		// 仅 IPv6 时换成该区域对应的 IPv6 专用套餐（优先用区域真实数据，失败才用兜底映射）
 		bundleToUse := bundle
 		if ipType == "ipv6" {
-			if v, ok := ipv6BundleMap[bundle]; ok {
+			if id, ok := ipv6BundleID(regionBundles(c.Request.Context(), region, ak, sk, proxy), bundle); ok {
+				bundleToUse = id
+			} else if v, ok := ipv6BundleMap[bundle]; ok {
 				bundleToUse = v
 			}
 		}
