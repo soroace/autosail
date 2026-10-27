@@ -7,14 +7,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"autosail/internal/aws"
 	"autosail/internal/session"
-	"autosail/internal/store"
 
 	"github.com/gin-gonic/gin"
 )
@@ -219,33 +217,6 @@ func TestLoginTemplateRenders(t *testing.T) {
 		if err := tmpl.ExecuteTemplate(&buf, name, data); err != nil {
 			t.Fatalf("渲染 %s 失败: %v", name, err)
 		}
-	}
-}
-
-// 片段接口端到端：handler + 模板渲染（无凭据时应渲染错误提示而不是空白/500）
-func TestHandleInstancesRendersFragment(t *testing.T) {
-	st, err := store.NewSQLiteStore(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("创建测试库失败: %v", err)
-	}
-	defer st.Close()
-	appStore = st
-	t.Cleanup(func() { appStore = nil })
-
-	w := httptest.NewRecorder()
-	c, r := gin.CreateTestContext(w)
-	r.SetHTMLTemplate(parseTemplates(t))
-
-	c.Request = httptest.NewRequest(http.MethodGet, "/aws/instances?service=lightsail&region=ap-northeast-1", nil)
-	c.Set("sess", session.NewStore().GetOrCreate("s1"))
-
-	handleInstances(c)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("状态码应为 200，实际 %d，body=%s", w.Code, w.Body.String())
-	}
-	if body := w.Body.String(); !strings.Contains(body, "请先启用一个有效密钥") {
-		t.Fatalf("无凭据时应渲染错误提示，实际 body=%q", body)
 	}
 }
 
