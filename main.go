@@ -1076,41 +1076,6 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"ok": true, "ip": ip, "as": asn})
 	})
 
-	// 拉取当前区域真实可用套餐（避免硬编码代次过期导致 NotFoundException）
-	r.GET("/aws/bundles", func(c *gin.Context) {
-		s := session.Must(c)
-		userID, _ := userIDFromSession(s)
-		keys, _ := appStore.ListKeys(c.Request.Context(), userID)
-		activeKey, _ := resolveActiveKey(s, keys)
-		if activeKey == nil || strings.TrimSpace(activeKey.AccessKey) == "" || strings.TrimSpace(activeKey.SecretKey) == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "请先启用一个有效密钥"})
-			return
-		}
-		region := normalizeRegion(strings.TrimSpace(c.Query("region")))
-		if region == "" {
-			region = "us-east-1"
-		}
-		cli, err := aws.NewLightsailClient(c.Request.Context(), region, activeKey.AccessKey, activeKey.SecretKey, activeKey.Proxy)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": formatFlashError(err)})
-			return
-		}
-		list, err := aws.ListBundles(c.Request.Context(), cli)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": formatFlashError(err)})
-			return
-		}
-		// 过滤 Windows 套餐（本服务只建 Linux 实例）
-		out := make([]aws.BundleView, 0, len(list))
-		for _, b := range list {
-			if b.Windows {
-				continue
-			}
-			out = append(out, b)
-		}
-		c.JSON(http.StatusOK, gin.H{"ok": true, "bundles": out})
-	})
-
 	// Create instance
 	r.POST("/aws/create", func(c *gin.Context) {
 		s := session.Must(c)
