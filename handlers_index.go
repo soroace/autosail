@@ -14,39 +14,10 @@ func handleIndex(c *gin.Context) {
 	isAdmin := isAdminSession(s)
 	regOpen, _ := appStore.RegistrationOpen(c.Request.Context())
 
-	tab := c.Query("tab")
-	if tab == "" {
-		tab = s.GetString("tab", "create")
-	} else {
-		s.SetString("tab", tab)
-	}
-	s.SetString("last_tab", tab)
-
-	serviceQuery := strings.TrimSpace(c.Query("service"))
-	switch tab {
-	case "create":
-		if serviceQuery != "" {
-			s.SetString("create_service", serviceQuery)
-		}
-	case "manage":
-		if serviceQuery != "" {
-			s.SetString("manage_service", serviceQuery)
-		}
-	}
-
-	region := normalizeRegion(c.Query("region"))
-	if region == "" {
-		region = normalizeRegion(s.GetString("region", "us-east-1"))
-	}
-	// 确保 session 一直是规范 region
-	s.SetString("region", region)
-
-	az := c.Query("az")
-	if az == "" {
-		az = s.GetString("az", "a")
-	} else {
-		s.SetString("az", az)
-	}
+	// 页面状态统一在一处解析：query > session > 默认值
+	st := resolvePageState(c, s)
+	tab, region, az := st.Tab, st.Region, st.AZ
+	createService, manageService := st.CreateService, st.ManageService
 
 	username := s.GetString("username", "")
 	keys, _ := appStore.ListKeys(c.Request.Context(), userID)
@@ -61,10 +32,8 @@ func handleIndex(c *gin.Context) {
 	// Create UI defaults (persist in session)
 	createIPType := s.GetString("create_ip_type", "dualstack")
 	createBlueprint := s.GetString("create_blueprint", "ubuntu_24_04")
-	createBundle := s.GetString("create_bundle", "nano_3_0")
+	createBundle := s.GetString("create_bundle", "nano_3_2")
 	createFW := s.GetString("create_fw_all", "1") == "1"
-	createService := s.GetString("create_service", "lightsail")
-	manageService := s.GetString("manage_service", "lightsail")
 	createEC2AMI := s.GetString("create_ec2_ami", "ubuntu-22.04")
 	createEC2Type := s.GetString("create_ec2_type", "t3.micro")
 	createEC2IPv6 := s.GetString("create_ec2_ipv6", "0") == "1"
@@ -212,4 +181,54 @@ func handleIndex(c *gin.Context) {
 
 
 	c.HTML(http.StatusOK, "layout", data)
+}
+
+// pageState 页面状态（优先级：query > session > 默认值）。
+// 集中在一处解析，避免各处 handler 分别拼装导致行为不一致。
+type pageState struct {
+	Tab           string // create / manage / quota
+	CreateService string // 创建页服务：lightsail / ec2
+	ManageService string // 管理页服务：lightsail / ec2
+	Region        string
+	AZ            string
+}
+
+func resolvePageState(c *gin.Context, s *session.Session) pageState {
+	var st pageState
+
+	st.Tab = c.Query("tab")
+	if st.Tab == "" {
+		st.Tab = s.GetString("tab", "create")
+	} else {
+		s.SetString("tab", st.Tab)
+	}
+	s.SetString("last_tab", st.Tab)
+
+	serviceQuery := strings.TrimSpace(c.Query("service"))
+	switch st.Tab {
+	case "create":
+		if serviceQuery != "" {
+			s.SetString("create_service", serviceQuery)
+		}
+	case "manage":
+		if serviceQuery != "" {
+			s.SetString("manage_service", serviceQuery)
+		}
+	}
+	st.CreateService = s.GetString("create_service", "lightsail")
+	st.ManageService = s.GetString("manage_service", "lightsail")
+
+	st.Region = normalizeRegion(c.Query("region"))
+	if st.Region == "" {
+		st.Region = normalizeRegion(s.GetString("region", "us-east-1"))
+	}
+	s.SetString("region", st.Region) // session 里始终存规范 region
+
+	st.AZ = c.Query("az")
+	if st.AZ == "" {
+		st.AZ = s.GetString("az", "a")
+	} else {
+		s.SetString("az", st.AZ)
+	}
+	return st
 }

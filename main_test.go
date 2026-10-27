@@ -4,11 +4,17 @@ import (
 	"bytes"
 	"fmt"
 	"html/template"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"autosail/internal/aws"
+	"autosail/internal/session"
+
+	"github.com/gin-gonic/gin"
 )
 
 func TestNormalizeRegion(t *testing.T) {
@@ -29,6 +35,11 @@ func TestNormalizeRegion(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMain(m *testing.M) {
+	gin.SetMode(gin.TestMode)
+	os.Exit(m.Run())
 }
 
 func parseTemplates(t *testing.T) *template.Template {
@@ -147,4 +158,38 @@ func TestLoginTemplateRenders(t *testing.T) {
 	if err := tmpl.ExecuteTemplate(&buf, "login", PageData{Title: "AutoSail"}); err != nil {
 		t.Fatalf("渲染 login 失败: %v", err)
 	}
+}
+
+// 页面状态解析：query 优先，其次 session，最后默认值
+func TestResolvePageState(t *testing.T) {
+	newCtx := func(rawURL string) *gin.Context {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodGet, rawURL, nil)
+		return c
+	}
+
+	t.Run("query 优先并规范化 region", func(t *testing.T) {
+		s := session.NewStore().GetOrCreate("t1")
+		st := resolvePageState(newCtx("/?tab=manage&service=ec2&region=ap-northeast-1a&az=b"), s)
+		if st.Tab != "manage" || st.ManageService != "ec2" || st.Region != "ap-northeast-1" || st.AZ != "b" {
+			t.Fatalf("解析结果不符: %+v", st)
+		}
+	})
+
+	t.Run("无参数时用默认值", func(t *testing.T) {
+		s := session.NewStore().GetOrCreate("t2")
+		st := resolvePageState(newCtx("/"), s)
+		if st.Tab != "create" || st.CreateService != "lightsail" || st.Region != "us-east-1" || st.AZ != "a" {
+			t.Fatalf("默认值不符: %+v", st)
+		}
+	})
+
+	t.Run("无 query 时沿用 session", func(t *testing.T) {
+		s := session.NewStore().GetOrCreate("t3")
+		resolvePageState(newCtx("/?tab=manage&region=eu-west-1&az=c"), s)
+		st := resolvePageState(newCtx("/"), s)
+		if st.Tab != "manage" || st.Region != "eu-west-1" || st.AZ != "c" {
+			t.Fatalf("session 回退失败: %+v", st)
+		}
+	})
 }
