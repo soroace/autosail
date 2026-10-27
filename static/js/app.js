@@ -269,6 +269,82 @@
   }, POLL_MS);
 })();
 
+// -------------------- 套餐按区域动态拉取 --------------------
+// Lightsail 套餐 ID 会换代（_3_0 → _3_2）且各区域不同，硬编码列表过期会导致创建时报 NotFoundException
+(function(){
+  let bundles = null;       // 上次拉取的完整列表（含 ipv6 标记）
+  let attemptedRegion = ''; // 已尝试过的区域，避免重复请求
+  let loading = false;
+
+  function createForm(){ return document.querySelector('form[action="/aws/create"]'); }
+
+  function render(){
+    const f = createForm();
+    if(!f || !bundles) return;
+    const ipTypeSel = f.querySelector('select[name="ip_type"]');
+    const bundleSel = f.querySelector('select[name="bundle_id"]');
+    if(!bundleSel) return;
+
+    const wantIPv6 = !!(ipTypeSel && ipTypeSel.value === 'ipv6');
+    const list = bundles.filter((b) => !!b.ipv6 === wantIPv6);
+    if(!list.length) return;
+
+    const prev = bundleSel.value;
+    const frag = document.createDocumentFragment();
+    list.forEach((b) => {
+      const opt = document.createElement('option');
+      opt.value = b.id;
+      opt.textContent = b.name + ' - ' + b.id;   // textContent 防注入
+      frag.appendChild(opt);
+    });
+    bundleSel.innerHTML = '';
+    bundleSel.appendChild(frag);
+    if(list.some((b) => b.id === prev)) bundleSel.value = prev;
+  }
+
+  async function load(region){
+    if(!region || loading) return;
+    if(region === attemptedRegion){
+      render(); // 已有该区域数据（DOM 可能刚被替换过），直接重绘
+      return;
+    }
+    attemptedRegion = region;
+    loading = true;
+    try{
+      const r = await fetch('/aws/bundles?region=' + encodeURIComponent(region));
+      const j = await r.json();
+      if(j && j.ok && Array.isArray(j.bundles) && j.bundles.length){
+        bundles = j.bundles;
+        render();
+      }
+    }catch(e){ /* 失败时保留服务端渲染的列表作为回退 */ }
+    finally{ loading = false; }
+  }
+
+  // 事件委托：tab-root 被 AJAX 替换后依然生效
+  document.addEventListener('change', (ev) => {
+    const el = ev.target;
+    if(!(el instanceof HTMLSelectElement)) return;
+    const f = createForm();
+    if(!f || !f.contains(el)) return;
+    if(el.name === 'region') load(el.value);
+    else if(el.name === 'ip_type') render();
+  });
+
+  // 首次进入 / 切回创建页时自动拉取
+  function ensureLoaded(){
+    const f = createForm();
+    if(!f) return;
+    const sel = f.querySelector('select[name="region"]');
+    if(sel) load(sel.value);
+  }
+  ensureLoaded();
+  const tabRoot = document.getElementById('tab-root');
+  if(tabRoot && tabRoot.parentNode && window.MutationObserver){
+    new MutationObserver(ensureLoaded).observe(tabRoot.parentNode, {childList: true});
+  }
+})();
+
 // -------------------- 复制 IP + 标签页 AJAX 切换 --------------------
 async function copyText(text){
   if(!text) return;

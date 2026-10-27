@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +26,73 @@ type InstanceView struct {
 	Zone       string
 	BundleID   string
 	Created    string
+}
+
+// BundleView 套餐（按区域实时拉取，避免硬编码过期导致 NotFoundException）
+type BundleView struct {
+	ID       string  `json:"id"`
+	Name     string  `json:"name"`
+	Price    float64 `json:"price"`
+	IPv6     bool    `json:"ipv6"` // 是否为 IPv6-only 专用套餐
+	Windows  bool    `json:"windows"`
+	CPU      int32   `json:"cpu"`
+	RAM      float64 `json:"ram"`
+	Disk     int32   `json:"disk"`
+	Transfer int32   `json:"transfer"`
+}
+
+// ListBundles 拉取当前区域真实可用的套餐
+func ListBundles(ctx context.Context, cli LightsailAPI) ([]BundleView, error) {
+	out, err := cli.GetBundles(ctx, &lightsail.GetBundlesInput{})
+	if err != nil {
+		return nil, fmt.Errorf("拉取套餐列表失败：%v", err)
+	}
+
+	var list []BundleView
+	for _, b := range out.Bundles {
+		id := str(b.BundleId)
+		if id == "" || (b.IsActive != nil && !*b.IsActive) {
+			continue
+		}
+		windows := strings.Contains(id, "_win_")
+		for _, p := range b.SupportedPlatforms {
+			if p == types.InstancePlatformWindows {
+				windows = true
+			}
+		}
+		ram := 0.0
+		if b.RamSizeInGb != nil {
+			ram = float64(*b.RamSizeInGb)
+		}
+		price := 0.0
+		if b.Price != nil {
+			price = float64(*b.Price)
+		}
+		cpu, disk, transfer := int32(0), int32(0), int32(0)
+		if b.CpuCount != nil {
+			cpu = *b.CpuCount
+		}
+		if b.DiskSizeInGb != nil {
+			disk = *b.DiskSizeInGb
+		}
+		if b.TransferPerMonthInGb != nil {
+			transfer = *b.TransferPerMonthInGb
+		}
+
+		list = append(list, BundleView{
+			ID:       id,
+			Name:     fmt.Sprintf("%s (%d vCPU, %s GB 内存, %d GB SSD, %d GB 流量/月, $%.2f)", str(b.InstanceType), cpu, strconv.FormatFloat(ram, 'f', -1, 64), disk, transfer, price),
+			Price:    price,
+			IPv6:     strings.Contains(id, "_ipv6_"),
+			Windows:  windows,
+			CPU:      cpu,
+			RAM:      ram,
+			Disk:     disk,
+			Transfer: transfer,
+		})
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].Price < list[j].Price })
+	return list, nil
 }
 
 func ListInstances(ctx context.Context, cli LightsailAPI) ([]InstanceView, error) {

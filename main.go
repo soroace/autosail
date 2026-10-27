@@ -245,11 +245,11 @@ var blueprintOptions = []Option{
 }
 
 var bundleOptions = []Option{
-	{ID: "nano_3_0", Name: "nano (2 vCPUs, 内存 0.5 GB, 硬盘 20 GB, 流量 1024 GB / 月)"},
-	{ID: "micro_3_0", Name: "micro (2 vCPUs, 内存 1 GB, 硬盘 40 GB, 流量 2048 GB / 月)"},
-	{ID: "small_3_0", Name: "small (2 vCPUs, 内存 2 GB, 硬盘 60 GB, 流量 3072 GB / 月)"},
-	{ID: "medium_3_0", Name: "medium (2 vCPUs, 内存 4 GB, 硬盘 80 GB, 流量 4096 GB / 月)"},
-	{ID: "large_3_0", Name: "large (2 vCPUs, 内存 8 GB, 硬盘 160 GB, 流量 5120 GB / 月)"},
+	{ID: "nano_3_2", Name: "nano (2 vCPUs, 内存 0.5 GB, 硬盘 20 GB, 流量 1024 GB / 月)"},
+	{ID: "micro_3_2", Name: "micro (2 vCPUs, 内存 1 GB, 硬盘 40 GB, 流量 2048 GB / 月)"},
+	{ID: "small_3_2", Name: "small (2 vCPUs, 内存 2 GB, 硬盘 60 GB, 流量 3072 GB / 月)"},
+	{ID: "medium_3_2", Name: "medium (2 vCPUs, 内存 4 GB, 硬盘 80 GB, 流量 4096 GB / 月)"},
+	{ID: "large_3_2", Name: "large (2 vCPUs, 内存 8 GB, 硬盘 160 GB, 流量 5120 GB / 月)"},
 }
 
 var ipTypeOptions = []Option{
@@ -296,11 +296,11 @@ var ec2InstanceTypes = []Option{
 }
 
 var ipv6BundleMap = map[string]string{
-	"nano_3_0":   "nano_ipv6_3_0",
-	"micro_3_0":  "micro_ipv6_3_0",
-	"small_3_0":  "small_ipv6_3_0",
-	"medium_3_0": "medium_ipv6_3_0",
-	"large_3_0":  "large_ipv6_3_0",
+	"nano_3_2":   "nano_ipv6_3_2",
+	"micro_3_2":  "micro_ipv6_3_2",
+	"small_3_2":  "small_ipv6_3_2",
+	"medium_3_2": "medium_ipv6_3_2",
+	"large_3_2":  "large_ipv6_3_2",
 }
 
 func regionLabel(id string) string {
@@ -1074,6 +1074,41 @@ func main() {
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "ip": ip, "as": asn})
+	})
+
+	// 拉取当前区域真实可用套餐（避免硬编码代次过期导致 NotFoundException）
+	r.GET("/aws/bundles", func(c *gin.Context) {
+		s := session.Must(c)
+		userID, _ := userIDFromSession(s)
+		keys, _ := appStore.ListKeys(c.Request.Context(), userID)
+		activeKey, _ := resolveActiveKey(s, keys)
+		if activeKey == nil || strings.TrimSpace(activeKey.AccessKey) == "" || strings.TrimSpace(activeKey.SecretKey) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "请先启用一个有效密钥"})
+			return
+		}
+		region := normalizeRegion(strings.TrimSpace(c.Query("region")))
+		if region == "" {
+			region = "us-east-1"
+		}
+		cli, err := aws.NewLightsailClient(c.Request.Context(), region, activeKey.AccessKey, activeKey.SecretKey, activeKey.Proxy)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": formatFlashError(err)})
+			return
+		}
+		list, err := aws.ListBundles(c.Request.Context(), cli)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": formatFlashError(err)})
+			return
+		}
+		// 过滤 Windows 套餐（本服务只建 Linux 实例）
+		out := make([]aws.BundleView, 0, len(list))
+		for _, b := range list {
+			if b.Windows {
+				continue
+			}
+			out = append(out, b)
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "bundles": out})
 	})
 
 	// Create instance
