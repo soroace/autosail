@@ -20,8 +20,6 @@ type fakeLightsail struct {
 	getStaticIP     func(name string) (*types.StaticIp, error)
 	attachErr       error
 	releaseErr      error
-	createBundleErr func(bundleID string) error // 创建实例时按套餐 ID 返回错误
-	bundles         []types.Bundle              // GetBundles 返回的套餐（供代次匹配用）
 	calls           []string
 }
 
@@ -92,18 +90,8 @@ func (f *fakeLightsail) DeleteInstance(context.Context, *lightsail.DeleteInstanc
 	return &lightsail.DeleteInstanceOutput{}, nil
 }
 
-func (f *fakeLightsail) GetBundles(context.Context, *lightsail.GetBundlesInput, ...func(*lightsail.Options)) (*lightsail.GetBundlesOutput, error) {
-	f.record("GetBundles")
-	return &lightsail.GetBundlesOutput{Bundles: f.bundles}, nil
-}
-
-func (f *fakeLightsail) CreateInstances(_ context.Context, in *lightsail.CreateInstancesInput, _ ...func(*lightsail.Options)) (*lightsail.CreateInstancesOutput, error) {
+func (f *fakeLightsail) CreateInstances(context.Context, *lightsail.CreateInstancesInput, ...func(*lightsail.Options)) (*lightsail.CreateInstancesOutput, error) {
 	f.record("CreateInstances")
-	if f.createBundleErr != nil {
-		if err := f.createBundleErr(str(in.BundleId)); err != nil {
-			return nil, err
-		}
-	}
 	return &lightsail.CreateInstancesOutput{}, nil
 }
 
@@ -337,68 +325,5 @@ func TestSwapStaticIPReleasesWhenAttachFailed(t *testing.T) {
 	}
 	if !f.called("ReleaseStaticIp") {
 		t.Fatal("未绑定的新 IP 应被回收")
-	}
-}
-
-// 套餐修订号回退：区域只提供 _3_1 时，应向 AWS 查到真实 ID 并重试成功
-func TestCreateInstanceFallsBackToRegionBundle(t *testing.T) {
-	var tried []string
-	f := &fakeLightsail{
-		bundles: []types.Bundle{
-			{BundleId: strPtr("micro_3_1"), IsActive: boolPtr(true)},
-			{BundleId: strPtr("nano_3_1"), IsActive: boolPtr(true)},
-		},
-		createBundleErr: func(id string) error {
-			tried = append(tried, id)
-			if id == "micro_3_2" {
-				return &smithy.GenericAPIError{Code: "NotFoundException", Message: "The specified bundle does not exist"}
-			}
-			return nil
-		},
-	}
-
-	err := CreateInstance(context.Background(), f, CreateInstanceInput{
-		InstanceName:     "vps1",
-		AvailabilityZone: "ap-northeast-1a",
-		BlueprintID:      "ubuntu_24_04",
-		BundleID:         "micro_3_2",
-		IPAddressType:    "dualstack",
-	})
-	if err != nil {
-		t.Fatalf("回退后应创建成功，实际报错: %v", err)
-	}
-	if len(tried) != 2 || tried[0] != "micro_3_2" || tried[1] != "micro_3_1" {
-		t.Fatalf("应按真实 ID 重试 micro_3_2 → micro_3_1，实际: %v", tried)
-	}
-	if !f.called("GetBundles") {
-		t.Fatal("回退前应查询该区域的套餐列表")
-	}
-}
-
-// 套餐基础名：去掉末尾的 "_代次_修订"
-func TestBundleBase(t *testing.T) {
-	cases := map[string]string{
-		"micro_3_2":      "micro",
-		"micro_ipv6_3_1": "micro_ipv6",
-		"nano_2_0":       "nano",
-		"weird":          "weird",
-	}
-	for in, want := range cases {
-		if got := bundleBase(in); got != want {
-			t.Fatalf("bundleBase(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
-// 只有"套餐不存在"才触发回退，其它错误直接返回
-func TestIsBundleNotFoundClassification(t *testing.T) {
-	if !isBundleNotFound(&smithy.GenericAPIError{Code: "NotFoundException", Message: "The specified bundle does not exist"}) {
-		t.Fatal("套餐不存在应被识别")
-	}
-	if isBundleNotFound(&smithy.GenericAPIError{Code: "AccessDeniedException", Message: "bundle denied"}) {
-		t.Fatal("权限错误不应触发回退")
-	}
-	if isBundleNotFound(errors.New("bundle not found")) {
-		t.Fatal("非 API 错误不应触发回退")
 	}
 }

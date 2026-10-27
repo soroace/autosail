@@ -245,11 +245,11 @@ var blueprintOptions = []Option{
 }
 
 var bundleOptions = []Option{
-	{ID: "nano_3_2", Name: "nano (2 vCPUs, 内存 0.5 GB, 硬盘 20 GB, 流量 1024 GB / 月)"},
-	{ID: "micro_3_2", Name: "micro (2 vCPUs, 内存 1 GB, 硬盘 40 GB, 流量 2048 GB / 月)"},
-	{ID: "small_3_2", Name: "small (2 vCPUs, 内存 2 GB, 硬盘 60 GB, 流量 3072 GB / 月)"},
-	{ID: "medium_3_2", Name: "medium (2 vCPUs, 内存 4 GB, 硬盘 80 GB, 流量 4096 GB / 月)"},
-	{ID: "large_3_2", Name: "large (2 vCPUs, 内存 8 GB, 硬盘 160 GB, 流量 5120 GB / 月)"},
+	{ID: "nano_3_0", Name: "nano (2 vCPUs, 内存 0.5 GB, 硬盘 20 GB, 流量 1024 GB / 月)"},
+	{ID: "micro_3_0", Name: "micro (2 vCPUs, 内存 1 GB, 硬盘 40 GB, 流量 2048 GB / 月)"},
+	{ID: "small_3_0", Name: "small (2 vCPUs, 内存 2 GB, 硬盘 60 GB, 流量 3072 GB / 月)"},
+	{ID: "medium_3_0", Name: "medium (2 vCPUs, 内存 4 GB, 硬盘 80 GB, 流量 4096 GB / 月)"},
+	{ID: "large_3_0", Name: "large (2 vCPUs, 内存 8 GB, 硬盘 160 GB, 流量 5120 GB / 月)"},
 }
 
 var ipTypeOptions = []Option{
@@ -296,11 +296,11 @@ var ec2InstanceTypes = []Option{
 }
 
 var ipv6BundleMap = map[string]string{
-	"nano_3_2":   "nano_ipv6_3_2",
-	"micro_3_2":  "micro_ipv6_3_2",
-	"small_3_2":  "small_ipv6_3_2",
-	"medium_3_2": "medium_ipv6_3_2",
-	"large_3_2":  "large_ipv6_3_2",
+	"nano_3_0":   "nano_ipv6_3_0",
+	"micro_3_0":  "micro_ipv6_3_0",
+	"small_3_0":  "small_ipv6_3_0",
+	"medium_3_0": "medium_ipv6_3_0",
+	"large_3_0":  "large_ipv6_3_0",
 }
 
 func regionLabel(id string) string {
@@ -654,7 +654,7 @@ func main() {
 		// Create UI defaults (persist in session)
 		createIPType := s.GetString("create_ip_type", "dualstack")
 		createBlueprint := s.GetString("create_blueprint", "ubuntu_24_04")
-		createBundle := s.GetString("create_bundle", "nano_3_2")
+		createBundle := s.GetString("create_bundle", "nano_3_0")
 		createFW := s.GetString("create_fw_all", "1") == "1"
 		createService := s.GetString("create_service", "lightsail")
 		manageService := s.GetString("manage_service", "lightsail")

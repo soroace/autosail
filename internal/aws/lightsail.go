@@ -94,87 +94,21 @@ type CreateInstanceInput struct {
 	EnableFWAll      bool
 }
 
-// isBundleNotFound 是否为"该套餐不存在"（各区域套餐 ID 的修订号不同，例如 _3_0 / _3_1 / _3_2）
-func isBundleNotFound(err error) bool {
-	if err == nil {
-		return false
-	}
-	if !isAPIErrorCode(err, "NotFoundException") {
-		return false
-	}
-	return strings.Contains(strings.ToLower(err.Error()), "bundle")
-}
-
-// bundleBase 去掉套餐 ID 末尾的 "_代次_修订"，例如 micro_ipv6_3_2 → micro_ipv6
-func bundleBase(id string) string {
-	parts := strings.Split(id, "_")
-	n := len(parts)
-	if n >= 3 && isAllDigits(parts[n-1]) && isAllDigits(parts[n-2]) {
-		return strings.Join(parts[:n-2], "_")
-	}
-	return id
-}
-
-func isAllDigits(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, r := range s {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
-}
-
-// matchBundleID 向 AWS 查询该区域实际可用的同规格套餐 ID（代次/修订由 AWS 决定，不写死）
-func matchBundleID(ctx context.Context, cli LightsailAPI, wanted string) (string, bool) {
-	base := bundleBase(wanted)
-	if base == "" {
-		return "", false
-	}
-	out, err := cli.GetBundles(ctx, &lightsail.GetBundlesInput{})
-	if err != nil || out == nil {
-		return "", false
-	}
-	for _, b := range out.Bundles {
-		id := str(b.BundleId)
-		if id == "" || (b.IsActive != nil && !*b.IsActive) {
-			continue
-		}
-		if bundleBase(id) == base {
-			return id, true
-		}
-	}
-	return "", false
-}
-
 func CreateInstance(ctx context.Context, cli LightsailAPI, in CreateInstanceInput) error {
 	ipType := in.IPAddressType
 	if ipType == "" {
 		ipType = "dualstack"
 	}
-	createOnce := func(bundleID string) error {
-		_, err := cli.CreateInstances(ctx, &lightsail.CreateInstancesInput{
-			InstanceNames:    []string{in.InstanceName},
-			AvailabilityZone: &in.AvailabilityZone,
-			BlueprintId:      &in.BlueprintID,
-			BundleId:         &bundleID,
-			UserData:         &in.UserData,
-			IpAddressType:    types.IpAddressType(ipType),
-		})
-		return err
-	}
-
-	err := createOnce(in.BundleID)
-	// 该区域可能用别的套餐修订（如 _3_1）：向 AWS 查真实 ID 后重试一次
-	if isBundleNotFound(err) {
-		if alt, ok := matchBundleID(ctx, cli, in.BundleID); ok && alt != in.BundleID {
-			err = createOnce(alt)
-		}
-	}
+	_, err := cli.CreateInstances(ctx, &lightsail.CreateInstancesInput{
+		InstanceNames:    []string{in.InstanceName},
+		AvailabilityZone: &in.AvailabilityZone,
+		BlueprintId:      &in.BlueprintID,
+		BundleId:         &in.BundleID,
+		UserData:         &in.UserData,
+		IpAddressType:    types.IpAddressType(ipType),
+	})
 	if err != nil {
-		return fmt.Errorf("创建实例失败：%w", err)
+		return fmt.Errorf("创建实例失败：%v", err)
 	}
 
 	if in.EnableFWAll {
