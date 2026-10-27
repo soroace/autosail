@@ -114,8 +114,11 @@ func TestManagePageRendersAsyncContainer(t *testing.T) {
 	tmpl := parseTemplates(t)
 
 	data := PageData{
-		Title: "AutoSail", Username: "tester", Tab: "manage",
-		HasCreds: true, ManageService: "lightsail", Region: "ap-northeast-1",
+		PageCommon: PageCommon{
+			Title: "AutoSail", Username: "tester", Tab: "manage",
+			HasCreds: true, Region: "ap-northeast-1",
+		},
+		PageManage: PageManage{ManageService: "lightsail"},
 	}
 	var buf bytes.Buffer
 	if err := tmpl.ExecuteTemplate(&buf, "layout", data); err != nil {
@@ -139,7 +142,7 @@ func TestTemplatesInjectPollInterval(t *testing.T) {
 	tmpl := parseTemplates(t)
 
 	var buf bytes.Buffer
-	if err := tmpl.ExecuteTemplate(&buf, "layout", PageData{Title: "AutoSail", Username: "tester"}); err != nil {
+	if err := tmpl.ExecuteTemplate(&buf, "layout", PageData{PageCommon: PageCommon{Title: "AutoSail", Username: "tester"}}); err != nil {
 		t.Fatalf("渲染 layout 失败: %v", err)
 	}
 
@@ -152,11 +155,68 @@ func TestTemplatesInjectPollInterval(t *testing.T) {
 	}
 }
 
+// 创建页/配额页渲染：覆盖经 PageCreate / PageQuota 嵌入暴露的全部字段
+func TestCreateAndQuotaPagesRender(t *testing.T) {
+	tmpl := parseTemplates(t)
+
+	cases := []struct {
+		name string
+		data PageData
+		want []string
+	}{
+		{
+			name: "create",
+			data: PageData{
+				PageCommon: PageCommon{Title: "AutoSail", Username: "tester", Tab: "create", Region: "ap-northeast-1", AZ: "a", HasCreds: true},
+				PageCreate: PageCreate{
+					CreateService: "lightsail", CreateIPType: "dualstack",
+					CreateBlueprint: "ubuntu_24_04", CreateBundle: "nano_3_2",
+					Blueprints: blueprintOptions, Bundles: bundleOptions, IPTypes: ipTypeOptions,
+					EC2AMIs: ec2AMIOptions, EC2Types: ec2InstanceTypes,
+					CreateRegions: lightsailRegionOptions,
+				},
+			},
+			want: []string{"ubuntu_24_04", "nano_3_2", "dualstack"},
+		},
+		{
+			name: "quota",
+			data: PageData{
+				PageCommon: PageCommon{Title: "AutoSail", Username: "tester", Tab: "quota", Region: "ap-northeast-1"},
+				PageQuota:  PageQuota{QuotaRegions: ec2RegionOptions, QuotaRegion: "ap-northeast-1", QuotaOn: "8", QuotaSpot: "16"},
+			},
+			want: []string{"ap-northeast-1", "16"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := tmpl.ExecuteTemplate(&buf, "layout", tc.data); err != nil {
+				t.Fatalf("渲染 %s 页失败: %v", tc.name, err)
+			}
+			out := buf.String()
+			for _, w := range tc.want {
+				if !strings.Contains(out, w) {
+					t.Fatalf("%s 页缺少 %q", tc.name, w)
+				}
+			}
+		})
+	}
+}
+
+// 登录/注册页模板渲染（PageData 改为嵌入结构后字段仍可直接访问）
 func TestLoginTemplateRenders(t *testing.T) {
 	tmpl := parseTemplates(t)
-	var buf bytes.Buffer
-	if err := tmpl.ExecuteTemplate(&buf, "login", PageData{Title: "AutoSail"}); err != nil {
-		t.Fatalf("渲染 login 失败: %v", err)
+
+	cases := map[string]PageData{
+		"login":    {PageCommon: PageCommon{Title: "AutoSail"}},
+		"register": {PageCommon: PageCommon{Title: "AutoSail", RegistrationCaptcha: "2 + 3", RegistrationOpen: true}},
+	}
+	for name, data := range cases {
+		var buf bytes.Buffer
+		if err := tmpl.ExecuteTemplate(&buf, name, data); err != nil {
+			t.Fatalf("渲染 %s 失败: %v", name, err)
+		}
 	}
 }
 

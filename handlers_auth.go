@@ -18,9 +18,11 @@ func handleLoginPage(c *gin.Context) {
 	userCount, _ := appStore.CountUsers(c.Request.Context())
 	regOpen, _ := appStore.RegistrationOpen(c.Request.Context())
 	data := PageData{
-		Title:            "AutoSail",
-		CSRFToken:        s.GetString("csrf_token", ""),
-		RegistrationOpen: regOpen,
+		PageCommon: PageCommon{
+			Title:            "AutoSail",
+			CSRFToken:        s.GetString("csrf_token", ""),
+			RegistrationOpen: regOpen,
+		},
 	}
 	if userCount == 0 {
 		data.Flash.Info = "首次使用：请直接输入要创建的管理员账号和密码登录。"
@@ -100,10 +102,12 @@ func handleRegisterPage(c *gin.Context) {
 	captchaQuestion, captchaAnswer := genRegistrationCaptcha()
 	s.SetString("reg_captcha_answer", captchaAnswer)
 	data := PageData{
-		Title:               "AutoSail",
-		CSRFToken:           s.GetString("csrf_token", ""),
-		RegistrationOpen:    regOpen,
-		RegistrationCaptcha: captchaQuestion,
+		PageCommon: PageCommon{
+			Title:               "AutoSail",
+			CSRFToken:           s.GetString("csrf_token", ""),
+			RegistrationOpen:    regOpen,
+			RegistrationCaptcha: captchaQuestion,
+		},
 	}
 	switch c.Query("msg") {
 	case "exists":

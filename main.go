@@ -35,7 +35,8 @@ type Flash struct {
 	Info    string
 }
 
-type PageData struct {
+// PageCommon 每个页面都需要的字段
+type PageCommon struct {
 	Title     string
 	CSRFToken string
 
@@ -47,6 +48,7 @@ type PageData struct {
 	Users               []store.User
 	CurrentUserID       int64
 
+	// 凭证侧栏（创建页/管理页共用）
 	HasCreds    bool
 	KeyName     string
 	AK          string
@@ -56,21 +58,23 @@ type PageData struct {
 	ActiveKey   string
 	PendingKey  int64
 
-	Region        string
-	CreateRegions []RegionOption
-	ManageRegions []RegionOption
-	QuotaRegions  []RegionOption
-	AZ            string
+	Region string
+	AZ     string
 
-	// Tabs: create/manage/quota
-	Tab string
+	Tab string // create / manage / quota
 
 	Flash Flash
 
 	// ToastInfo: 右下角全局提示弹窗（如已退出登录）
 	ToastInfo string
 
-	// Create form
+	// Proxy check
+	ProxyExitIP  string
+	ProxyExitASN string
+}
+
+// PageCreate 创建实例页专属字段
+type PageCreate struct {
 	CreateEnableFW   bool
 	CreateIPType     string
 	CreateBlueprint  string
@@ -88,19 +92,31 @@ type PageData struct {
 	EC2AMIs    []Option
 	EC2Types   []Option
 
-	// Proxy check
-	ProxyExitIP  string
-	ProxyExitASN string
+	CreateRegions []RegionOption
+}
 
-	// Manage（实例列表改由 /aws/instances 异步渲染，字段见 InstanceSectionData）
+// PageManage 管理页专属字段（实例列表见 InstanceSectionData）
+type PageManage struct {
 	ManageService string
+	ManageRegions []RegionOption
+}
 
-	// Quota
-	QuotaRegion string
-	QuotaOn     string
-	QuotaSpot   string
-	QuotaOnName string
-	QuotaSpName string
+// PageQuota 配额页专属字段
+type PageQuota struct {
+	QuotaRegions []RegionOption
+	QuotaRegion  string
+	QuotaOn      string
+	QuotaSpot    string
+	QuotaOnName  string
+	QuotaSpName  string
+}
+
+// PageData 页面数据：按 tab 分组，经匿名嵌入保持字段可直接访问（模板无需改动）
+type PageData struct {
+	PageCommon
+	PageCreate
+	PageManage
+	PageQuota
 }
 
 // InstanceSectionData 实例列表片段的数据：由 /aws/instances 异步渲染，
