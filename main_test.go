@@ -43,25 +43,25 @@ func parseTemplates(t *testing.T) *template.Template {
 	return tmpl
 }
 
-// 状态徽章由 stateBadge 片段输出，两个实例列表都应正常渲染
+// 实例列表片段：两个服务各自的徽章与卡片应正常渲染（列表改为异步渲染）
 func TestTemplatesRenderInstances(t *testing.T) {
 	tmpl := parseTemplates(t)
 
 	cases := []struct {
 		name string
-		data PageData
+		data InstanceSectionData
 	}{
 		{
 			name: "lightsail",
-			data: PageData{
-				Title: "AutoSail", Username: "tester", Tab: "manage", HasCreds: true, ManageService: "lightsail",
+			data: InstanceSectionData{
+				CSRFToken: "tok", Region: "ap-northeast-1", ManageService: "lightsail",
 				Instances: []aws.InstanceView{{Name: "vps-running", State: "running"}, {Name: "vps-pending", State: "pending"}},
 			},
 		},
 		{
 			name: "ec2",
-			data: PageData{
-				Title: "AutoSail", Username: "tester", Tab: "manage", HasCreds: true, ManageService: "ec2",
+			data: InstanceSectionData{
+				CSRFToken: "tok", Region: "ap-northeast-1", ManageService: "ec2",
 				EC2Instances: []aws.EC2InstanceView{{ID: "i-1", State: "running"}, {ID: "i-2", State: "pending"}},
 			},
 		},
@@ -70,8 +70,8 @@ func TestTemplatesRenderInstances(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			if err := tmpl.ExecuteTemplate(&buf, "layout", tc.data); err != nil {
-				t.Fatalf("渲染 layout 失败: %v", err)
+			if err := tmpl.ExecuteTemplate(&buf, "instanceSection", tc.data); err != nil {
+				t.Fatalf("渲染 instanceSection 失败: %v", err)
 			}
 			out := buf.String()
 			// 徽章必须带 data-state（静默刷新依赖）且两种状态都渲染出来
@@ -81,6 +81,45 @@ func TestTemplatesRenderInstances(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// 拉取失败（无凭据/AWS 报错）时片段内应显示错误，而不是渲染成空列表
+func TestInstanceSectionShowsError(t *testing.T) {
+	tmpl := parseTemplates(t)
+
+	var buf bytes.Buffer
+	err := tmpl.ExecuteTemplate(&buf, "instanceSection", InstanceSectionData{Error: "拉取实例失败：超时"})
+	if err != nil {
+		t.Fatalf("渲染 instanceSection 失败: %v", err)
+	}
+	if !strings.Contains(buf.String(), "拉取实例失败") {
+		t.Fatal("片段应显示错误信息")
+	}
+}
+
+// 管理页外壳应只输出异步容器（不阻塞 AWS），并带上前端需要的 data 属性
+func TestManagePageRendersAsyncContainer(t *testing.T) {
+	tmpl := parseTemplates(t)
+
+	data := PageData{
+		Title: "AutoSail", Username: "tester", Tab: "manage",
+		HasCreds: true, ManageService: "lightsail", Region: "ap-northeast-1",
+	}
+	var buf bytes.Buffer
+	if err := tmpl.ExecuteTemplate(&buf, "layout", data); err != nil {
+		t.Fatalf("渲染 layout 失败: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{
+		`id="instanceList"`,
+		`data-service="lightsail"`,
+		`data-region="ap-northeast-1"`,
+		"加载中",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("管理页缺少 %q", want)
+		}
 	}
 }
 

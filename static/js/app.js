@@ -211,17 +211,21 @@
   });
 })();
 
-// -------------------- 实例列表静默刷新 --------------------
-// 存在过渡态实例时静默刷新，间隔由服务端按缓存时长注入（见 main.go instPollIntervalMS）
+// -------------------- 实例列表异步加载 + 静默刷新 --------------------
+// 列表由 /aws/instances 片段异步加载（页面不再同步等待 AWS）；
+// 存在过渡态实例时按注入间隔轮询该片段（见 main.go instPollIntervalMS）。
 (function(){
   const TRANSITIONAL = ['pending', 'stopping', 'shutting-down'];
   const POLL_MS = Number(document.body.dataset.instPollMs) || 12000;
-  let inFlight = false;
   const MAX_POLLS = Math.ceil(60000 / POLL_MS); // 单轮过渡态最多自动刷新约 1 分钟
+  let inFlight = false;
   let pollCount = 0;
+  let loadedEl = null; // 已成功写入内容的容器（DOM 被替换后会重新加载）
 
   // 用户手动操作（刷新/重启等）后重新给一轮预算
   window.__instPollReset = function(){ pollCount = 0; };
+
+  function box(){ return document.getElementById('instanceList'); }
 
   function hasTransitional(){
     return Array.from(document.querySelectorAll('[data-state]')).some((el) =>
@@ -229,43 +233,47 @@
     );
   }
 
-  // 副本上剥掉动画类再比较，替换用原件
-  function normalizedHtml(root){
-    const clone = root.cloneNode(true);
-    clone.classList.remove('animate-fade-in');
-    return clone.outerHTML;
-  }
-
-  async function silentRefresh(){
-    if(inFlight) return;
+  async function load(force){
+    const el = box();
+    if(!el || inFlight) return;
+    if(!force && el === loadedEl) return;
+    const service = el.dataset.service || 'lightsail';
+    const region = el.dataset.region || '';
     inFlight = true;
     try{
-      const resp = await fetch(window.location.href, {headers: {'X-Requested-With': 'fetch-tab'}});
+      const resp = await fetch('/aws/instances?service=' + encodeURIComponent(service)
+        + '&region=' + encodeURIComponent(region), {headers: {'X-Requested-With': 'fetch-fragment'}});
       if(!resp.ok) return;
       const html = await resp.text();
-      const doc = new DOMParser().parseFromString(html, 'text/html');
-      const newRoot = doc.getElementById('tab-root');
-      const curRoot = document.getElementById('tab-root');
-      if(!newRoot || !curRoot) return;
-      // 替换前重校验，期间有变动则放弃本次
-      if(document.getElementById('tab-root') !== curRoot) return;
-      if(window.__ajaxFormBusy) return;
-      if(document.querySelector('.custom-confirm-mask.is-open')) return;
-      if(normalizedHtml(newRoot) === normalizedHtml(curRoot)) return;
-      newRoot.classList.remove('animate-fade-in');
-      curRoot.replaceWith(newRoot);
+      if(box() !== el) return;              // 期间 DOM 已被替换，放弃本次
+      if(el.innerHTML !== html) el.innerHTML = html;
+      loadedEl = el;
     }catch(e){ /* 网络抖动等下次轮询 */ }
     finally{ inFlight = false; }
   }
 
+  window.__loadInstances = load;
+
+  // 首次加载 / tab-root 被 AJAX 替换后自动加载
+  function ensure(){
+    const el = box();
+    if(el && el !== loadedEl) load(false);
+  }
+  ensure();
+  const tabRoot = document.getElementById('tab-root');
+  if(tabRoot && tabRoot.parentNode && window.MutationObserver){
+    new MutationObserver(ensure).observe(tabRoot.parentNode, {childList: true});
+  }
+
   setInterval(() => {
-    if(document.visibilityState !== 'visible') return;          // 后台标签页不请求
-    if(document.querySelector('.custom-confirm-mask.is-open')) return; // 确认弹窗打开时不刷
-    if(!document.getElementById('tab-root')) return;
-    if(!hasTransitional()){ pollCount = 0; return; }            // 回到稳定态即重置预算
-    if(pollCount >= MAX_POLLS) return;                          // 超预算不再请求
+    if(document.visibilityState !== 'visible') return;                  // 后台标签页不请求
+    if(document.querySelector('.custom-confirm-mask.is-open')) return;   // 确认弹窗打开时不刷
+    if(window.__ajaxFormBusy) return;                                    // 提交中不刷
+    if(!box()) return;
+    if(!hasTransitional()){ pollCount = 0; return; }                     // 回到稳定态即重置预算
+    if(pollCount >= MAX_POLLS) return;                                   // 超预算不再请求
     pollCount++;
-    silentRefresh();
+    load(true);
   }, POLL_MS);
 })();
 

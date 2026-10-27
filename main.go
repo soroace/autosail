@@ -94,9 +94,7 @@ type PageData struct {
 	ProxyExitIP  string
 	ProxyExitASN string
 
-	// Manage
-	Instances     []aws.InstanceView
-	EC2Instances  []aws.EC2InstanceView
+	// Manage（实例列表改由 /aws/instances 异步渲染，字段见 InstanceSectionData）
 	ManageService string
 
 	// Quota
@@ -105,6 +103,17 @@ type PageData struct {
 	QuotaSpot   string
 	QuotaOnName string
 	QuotaSpName string
+}
+
+// InstanceSectionData 实例列表片段的数据：由 /aws/instances 异步渲染，
+// 避免管理页在 HTTP 请求里同步等待 AWS 调用（慢时会让页面卡几十秒）。
+type InstanceSectionData struct {
+	CSRFToken     string
+	Region        string
+	ManageService string
+	Instances     []aws.InstanceView
+	EC2Instances  []aws.EC2InstanceView
+	Error         string
 }
 
 func formatFlashError(err error) string {
@@ -666,7 +675,6 @@ func main() {
 		manageRegions := regionOptionsForService(manageService)
 
 		activeAK := strings.TrimSpace(keyAccessKey(activeKey))
-		activeProxy := strings.TrimSpace(keyProxy(activeKey))
 		activeHasCreds := activeKey != nil && activeAK != "" && strings.TrimSpace(activeKey.SecretKey) != ""
 
 		data := PageData{
@@ -804,48 +812,6 @@ func main() {
 			}
 		}
 
-		// manage list
-		if tab == "manage" && activeHasCreds {
-			if manageService == "ec2" {
-				key := strings.Join([]string{"ec2inst", region, activeAK, activeProxy}, "|")
-				if v, ok := instCache.Get(key); ok {
-					data.EC2Instances = v.([]aws.EC2InstanceView)
-				} else {
-					cli, err := aws.NewEC2Client(c.Request.Context(), region, activeAK, activeKey.SecretKey, activeProxy)
-					if err != nil {
-						data.Flash.Error = "创建 EC2 client 失败：" + err.Error()
-					} else {
-						list, err := aws.ListEC2Instances(c.Request.Context(), cli)
-						if err != nil {
-							data.Flash.Error = "拉取 EC2 实例失败：" + err.Error()
-						} else {
-							data.EC2Instances = list
-							instCache.Set(key, list, cache.DefaultExpiration)
-						}
-					}
-				}
-			} else {
-				key := strings.Join([]string{"inst", region, activeAK, activeProxy}, "|")
-				if v, ok := instCache.Get(key); ok {
-					data.Instances = v.([]aws.InstanceView)
-				} else {
-					cli, err := aws.NewLightsailClient(c.Request.Context(), region, activeAK, activeKey.SecretKey, activeProxy)
-					if err != nil {
-						data.Flash.Error = "创建 Lightsail client 失败：" + err.Error()
-					} else {
-						list, err := aws.ListInstances(c.Request.Context(), cli)
-						if err != nil {
-							data.Flash.Error = "拉取实例失败：" + err.Error()
-						} else {
-							data.Instances = list
-							instCache.Set(key, list, cache.DefaultExpiration)
-						}
-					}
-				}
-			}
-		} else if tab == "manage" && !activeHasCreds {
-			data.Flash.Warn = "请先启用一个有效密钥再查看实例列表"
-		}
 
 		c.HTML(http.StatusOK, "layout", data)
 	})
@@ -1109,6 +1075,70 @@ func main() {
 			out = append(out, b)
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "bundles": out})
+	})
+
+	// 实例列表片段（异步加载，避免管理页渲染时同步阻塞 AWS 调用）
+	r.GET("/aws/instances", func(c *gin.Context) {
+		s := session.Must(c)
+		userID, _ := userIDFromSession(s)
+		keys, _ := appStore.ListKeys(c.Request.Context(), userID)
+		activeKey, _ := resolveActiveKey(s, keys)
+
+		service := strings.TrimSpace(c.Query("service"))
+		if service != "ec2" {
+			service = "lightsail"
+		}
+		region := normalizeRegion(strings.TrimSpace(c.Query("region")))
+		if region == "" {
+			region = "us-east-1"
+		}
+		data := InstanceSectionData{
+			CSRFToken:     s.GetString("csrf_token", ""),
+			Region:        region,
+			ManageService: service,
+		}
+
+		ak := strings.TrimSpace(keyAccessKey(activeKey))
+		if activeKey == nil || ak == "" || strings.TrimSpace(activeKey.SecretKey) == "" {
+			data.Error = "请先启用一个有效密钥再查看实例列表"
+			c.HTML(http.StatusOK, "instanceSection", data)
+			return
+		}
+		sk := strings.TrimSpace(activeKey.SecretKey)
+		proxy := strings.TrimSpace(activeKey.Proxy)
+
+		if service == "ec2" {
+			key := strings.Join([]string{"ec2inst", region, ak, proxy}, "|")
+			if v, ok := instCache.Get(key); ok {
+				data.EC2Instances = v.([]aws.EC2InstanceView)
+			} else {
+				cli, err := aws.NewEC2Client(c.Request.Context(), region, ak, sk, proxy)
+				if err != nil {
+					data.Error = "创建 EC2 client 失败：" + formatFlashError(err)
+				} else if list, err := aws.ListEC2Instances(c.Request.Context(), cli); err != nil {
+					data.Error = "拉取 EC2 实例失败：" + formatFlashError(err)
+				} else {
+					data.EC2Instances = list
+					instCache.Set(key, list, cache.DefaultExpiration)
+				}
+			}
+		} else {
+			key := strings.Join([]string{"inst", region, ak, proxy}, "|")
+			if v, ok := instCache.Get(key); ok {
+				data.Instances = v.([]aws.InstanceView)
+			} else {
+				cli, err := aws.NewLightsailClient(c.Request.Context(), region, ak, sk, proxy)
+				if err != nil {
+					data.Error = "创建 Lightsail client 失败：" + formatFlashError(err)
+				} else if list, err := aws.ListInstances(c.Request.Context(), cli); err != nil {
+					data.Error = "拉取实例失败：" + formatFlashError(err)
+				} else {
+					data.Instances = list
+					instCache.Set(key, list, cache.DefaultExpiration)
+				}
+			}
+		}
+		c.HTML(http.StatusOK, "instanceSection", data)
 	})
 
 	// Create instance
