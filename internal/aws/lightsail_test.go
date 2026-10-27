@@ -20,6 +20,7 @@ type fakeLightsail struct {
 	getStaticIP     func(name string) (*types.StaticIp, error)
 	attachErr       error
 	releaseErr      error
+	createBundleErr func(bundleID string) error // 创建实例时按套餐 ID 返回错误
 	calls           []string
 }
 
@@ -90,8 +91,13 @@ func (f *fakeLightsail) DeleteInstance(context.Context, *lightsail.DeleteInstanc
 	return &lightsail.DeleteInstanceOutput{}, nil
 }
 
-func (f *fakeLightsail) CreateInstances(context.Context, *lightsail.CreateInstancesInput, ...func(*lightsail.Options)) (*lightsail.CreateInstancesOutput, error) {
+func (f *fakeLightsail) CreateInstances(_ context.Context, in *lightsail.CreateInstancesInput, _ ...func(*lightsail.Options)) (*lightsail.CreateInstancesOutput, error) {
 	f.record("CreateInstances")
+	if f.createBundleErr != nil {
+		if err := f.createBundleErr(str(in.BundleId)); err != nil {
+			return nil, err
+		}
+	}
 	return &lightsail.CreateInstancesOutput{}, nil
 }
 
@@ -325,5 +331,68 @@ func TestSwapStaticIPReleasesWhenAttachFailed(t *testing.T) {
 	}
 	if !f.called("ReleaseStaticIp") {
 		t.Fatal("未绑定的新 IP 应被回收")
+	}
+}
+
+// 套餐代次回退：不同区域使用 _2_0 / _3_0 / _3_2，失败时自动换一代重试
+func TestCreateInstanceFallsBackToOtherBundleGeneration(t *testing.T) {
+	var tried []string
+	f := &fakeLightsail{createBundleErr: func(id string) error {
+		tried = append(tried, id)
+		if id == "micro_3_2" {
+			return &smithy.GenericAPIError{Code: "NotFoundException", Message: "The specified bundle does not exist"}
+		}
+		return nil
+	}}
+
+	err := CreateInstance(context.Background(), f, CreateInstanceInput{
+		InstanceName:     "vps1",
+		AvailabilityZone: "ap-northeast-1a",
+		BlueprintID:      "ubuntu_24_04",
+		BundleID:         "micro_3_2",
+		IPAddressType:    "dualstack",
+	})
+	if err != nil {
+		t.Fatalf("回退后应创建成功，实际报错: %v", err)
+	}
+	if len(tried) != 2 || tried[0] != "micro_3_2" || tried[1] != "micro_3_0" {
+		t.Fatalf("应按顺序重试 _3_2 → _3_0，实际: %v", tried)
+	}
+}
+
+// 套餐代次候选：IPv6 专用套餐的代次替换同样适用
+func TestBundleGenerationFallbacks(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{"micro_3_2", []string{"micro_3_0", "micro_2_0"}},
+		{"micro_ipv6_3_0", []string{"micro_ipv6_3_2", "micro_ipv6_2_0"}},
+		{"nano_2_0", []string{"nano_3_2", "nano_3_0"}},
+		{"weird", nil},
+	}
+	for _, tc := range cases {
+		got := bundleGenerationFallbacks(tc.in)
+		if len(got) != len(tc.want) {
+			t.Fatalf("%q 候选数量不符: %v", tc.in, got)
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Fatalf("%q 候选不符: got=%v want=%v", tc.in, got, tc.want)
+			}
+		}
+	}
+}
+
+// 只有"套餐不存在"才触发代次回退，其它错误直接返回
+func TestIsBundleNotFoundClassification(t *testing.T) {
+	if !isBundleNotFound(&smithy.GenericAPIError{Code: "NotFoundException", Message: "The specified bundle does not exist"}) {
+		t.Fatal("套餐不存在应被识别")
+	}
+	if isBundleNotFound(&smithy.GenericAPIError{Code: "AccessDeniedException", Message: "bundle denied"}) {
+		t.Fatal("权限错误不应触发回退")
+	}
+	if isBundleNotFound(errors.New("bundle not found")) {
+		t.Fatal("非 API 错误不应触发回退")
 	}
 }

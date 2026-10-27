@@ -94,21 +94,62 @@ type CreateInstanceInput struct {
 	EnableFWAll      bool
 }
 
+// isBundleNotFound 是否为"该套餐不存在"（各区域的套餐代次不同：_2_0 / _3_0 / _3_2）
+func isBundleNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	if !isAPIErrorCode(err, "NotFoundException") {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "bundle")
+}
+
+// bundleGenerationFallbacks 返回同一规格在其他套餐代次下的候选 ID
+func bundleGenerationFallbacks(id string) []string {
+	gens := []string{"_3_2", "_3_0", "_2_0"}
+	for _, g := range gens {
+		if !strings.Contains(id, g) {
+			continue
+		}
+		var out []string
+		for _, alt := range gens {
+			if alt != g {
+				out = append(out, strings.Replace(id, g, alt, 1))
+			}
+		}
+		return out
+	}
+	return nil
+}
+
 func CreateInstance(ctx context.Context, cli LightsailAPI, in CreateInstanceInput) error {
 	ipType := in.IPAddressType
 	if ipType == "" {
 		ipType = "dualstack"
 	}
-	_, err := cli.CreateInstances(ctx, &lightsail.CreateInstancesInput{
-		InstanceNames:    []string{in.InstanceName},
-		AvailabilityZone: &in.AvailabilityZone,
-		BlueprintId:      &in.BlueprintID,
-		BundleId:         &in.BundleID,
-		UserData:         &in.UserData,
-		IpAddressType:    types.IpAddressType(ipType),
-	})
+	createOnce := func(bundleID string) error {
+		_, err := cli.CreateInstances(ctx, &lightsail.CreateInstancesInput{
+			InstanceNames:    []string{in.InstanceName},
+			AvailabilityZone: &in.AvailabilityZone,
+			BlueprintId:      &in.BlueprintID,
+			BundleId:         &bundleID,
+			UserData:         &in.UserData,
+			IpAddressType:    types.IpAddressType(ipType),
+		})
+		return err
+	}
+
+	err := createOnce(in.BundleID)
+	// 该区域可能用别的套餐代次（例如只提供 _3_0）：自动换一代重试
+	for _, alt := range bundleGenerationFallbacks(in.BundleID) {
+		if !isBundleNotFound(err) {
+			break
+		}
+		err = createOnce(alt)
+	}
 	if err != nil {
-		return fmt.Errorf("创建实例失败：%v", err)
+		return fmt.Errorf("创建实例失败：%w", err)
 	}
 
 	if in.EnableFWAll {
