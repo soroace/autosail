@@ -94,7 +94,7 @@ type CreateInstanceInput struct {
 	EnableFWAll      bool
 }
 
-// isBundleNotFound 是否为"该套餐不存在"（各区域的套餐代次不同：_2_0 / _3_0 / _3_2）
+// isBundleNotFound 是否为"该套餐不存在"（各区域套餐 ID 的修订号不同，例如 _3_0 / _3_1 / _3_2）
 func isBundleNotFound(err error) bool {
 	if err == nil {
 		return false
@@ -105,22 +105,48 @@ func isBundleNotFound(err error) bool {
 	return strings.Contains(strings.ToLower(err.Error()), "bundle")
 }
 
-// bundleGenerationFallbacks 返回同一规格在其他套餐代次下的候选 ID
-func bundleGenerationFallbacks(id string) []string {
-	gens := []string{"_3_2", "_3_0", "_2_0"}
-	for _, g := range gens {
-		if !strings.Contains(id, g) {
+// bundleBase 去掉套餐 ID 末尾的 "_代次_修订"，例如 micro_ipv6_3_2 → micro_ipv6
+func bundleBase(id string) string {
+	parts := strings.Split(id, "_")
+	n := len(parts)
+	if n >= 3 && isAllDigits(parts[n-1]) && isAllDigits(parts[n-2]) {
+		return strings.Join(parts[:n-2], "_")
+	}
+	return id
+}
+
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// matchBundleID 向 AWS 查询该区域实际可用的同规格套餐 ID（代次/修订由 AWS 决定，不写死）
+func matchBundleID(ctx context.Context, cli LightsailAPI, wanted string) (string, bool) {
+	base := bundleBase(wanted)
+	if base == "" {
+		return "", false
+	}
+	out, err := cli.GetBundles(ctx, &lightsail.GetBundlesInput{})
+	if err != nil || out == nil {
+		return "", false
+	}
+	for _, b := range out.Bundles {
+		id := str(b.BundleId)
+		if id == "" || (b.IsActive != nil && !*b.IsActive) {
 			continue
 		}
-		var out []string
-		for _, alt := range gens {
-			if alt != g {
-				out = append(out, strings.Replace(id, g, alt, 1))
-			}
+		if bundleBase(id) == base {
+			return id, true
 		}
-		return out
 	}
-	return nil
+	return "", false
 }
 
 func CreateInstance(ctx context.Context, cli LightsailAPI, in CreateInstanceInput) error {
@@ -141,12 +167,11 @@ func CreateInstance(ctx context.Context, cli LightsailAPI, in CreateInstanceInpu
 	}
 
 	err := createOnce(in.BundleID)
-	// 该区域可能用别的套餐代次（例如只提供 _3_0）：自动换一代重试
-	for _, alt := range bundleGenerationFallbacks(in.BundleID) {
-		if !isBundleNotFound(err) {
-			break
+	// 该区域可能用别的套餐修订（如 _3_1）：向 AWS 查真实 ID 后重试一次
+	if isBundleNotFound(err) {
+		if alt, ok := matchBundleID(ctx, cli, in.BundleID); ok && alt != in.BundleID {
+			err = createOnce(alt)
 		}
-		err = createOnce(alt)
 	}
 	if err != nil {
 		return fmt.Errorf("创建实例失败：%w", err)
