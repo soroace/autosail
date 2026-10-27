@@ -515,7 +515,16 @@ async function copyText(text){
       const doc = new DOMParser().parseFromString(html, 'text/html');
       const newTabRoot = doc.getElementById('tab-root');
       const currentTabRoot = document.getElementById('tab-root');
-      if(newTabRoot && currentTabRoot) currentTabRoot.replaceWith(newTabRoot);
+      if(newTabRoot && currentTabRoot){
+        // 同一视图（同服务/同区域）更新时保留旧列表内容，
+        // 否则替换后会先闪一下“加载中…”再被片段填充
+        const prev = currentTabRoot.querySelector('#instanceList');
+        const next = newTabRoot.querySelector('#instanceList');
+        if(prev && next && prev.dataset.service === next.dataset.service && prev.dataset.region === next.dataset.region){
+          next.innerHTML = prev.innerHTML;
+        }
+        currentTabRoot.replaceWith(newTabRoot);
+      }
       if(window.__instPollReset) window.__instPollReset();
       const newFlashRoot = doc.getElementById('flash-root');
       const currentFlashRoot = document.getElementById('flash-root');
