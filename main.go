@@ -249,6 +249,13 @@ func main() {
 
 	r := gin.New()
 	r.Use(gin.Logger(), gin.Recovery())
+	// 静态资源强制重验证：改 JS/CSS 后浏览器不会继续用旧缓存（304 开销极小）
+	r.Use(func(c *gin.Context) {
+		if strings.HasPrefix(c.Request.URL.Path, "/static/") {
+			c.Header("Cache-Control", "no-cache")
+		}
+		c.Next()
+	})
 	r.Static("/static", "./static")
 
 	// templates

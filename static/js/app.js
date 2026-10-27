@@ -242,13 +242,19 @@
     inFlight = true;
     try{
       const resp = await fetch('/aws/instances?service=' + encodeURIComponent(service)
-        + '&region=' + encodeURIComponent(region), {headers: {'X-Requested-With': 'fetch-fragment'}});
-      if(!resp.ok) return;
+        + '&region=' + encodeURIComponent(region), {headers: {'X-Requested-With': 'fetch-fragment'}, cache: 'no-store'});
+      if(!resp.ok){
+        // 失败要可见，否则界面会一直停在“加载中”
+        el.innerHTML = '<div class="rounded-xl border border-rose-100 bg-rose-50 px-4 py-3 text-sm text-rose-700">实例列表加载失败（HTTP ' + resp.status + '），请刷新页面重试</div>';
+        return;
+      }
       const html = await resp.text();
       if(box() !== el) return;              // 期间 DOM 已被替换，放弃本次
       if(el.innerHTML !== html) el.innerHTML = html;
       loadedEl = el;
-    }catch(e){ /* 网络抖动等下次轮询 */ }
+    }catch(e){
+      el.innerHTML = '<div class="rounded-xl border border-rose-100 bg-rose-50 px-4 py-3 text-sm text-rose-700">实例列表加载失败（网络错误），请刷新页面重试</div>';
+    }
     finally{ inFlight = false; }
   }
 
