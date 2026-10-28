@@ -211,62 +211,62 @@
   });
 })();
 
-// -------------------- 实例列表静默刷新 --------------------
-// 存在过渡态实例时静默刷新，间隔由服务端按缓存时长注入（见 main.go instPollIntervalMS）
+// -------------------- 创建后的启动轮询 --------------------
+// 创建成功回到列表后：先等 8 秒，再每 1 秒查一次真实状态（第 8/9/10/11/12 秒共 5 次），
+// 实例变成 running（列表里不再有过渡态）立即停止；超过 12 秒不再拉取。
 (function(){
+  const FIRST_DELAY_MS = 8000;   // 回到列表后先等 8 秒
+  const INTERVAL_MS = 1000;      // 之后每 1 秒一次
+  const MAX_ATTEMPTS = 5;        // 8/9/10/11/12 秒，共 5 次
   const TRANSITIONAL = ['pending', 'stopping', 'shutting-down'];
-  const POLL_MS = Number(document.body.dataset.instPollMs) || 12000;
-  let inFlight = false;
-  const MAX_POLLS = Math.ceil(60000 / POLL_MS); // 单轮过渡态最多自动刷新约 1 分钟
-  let pollCount = 0;
-
-  // 用户手动操作（刷新/重启等）后重新给一轮预算
-  window.__instPollReset = function(){ pollCount = 0; };
+  let timer = null;
 
   function hasTransitional(){
     return Array.from(document.querySelectorAll('[data-state]')).some((el) =>
-      TRANSITIONAL.includes((el.getAttribute('data-state') || '').toLowerCase())
-    );
+      TRANSITIONAL.includes((el.getAttribute('data-state') || '').toLowerCase()));
   }
 
-  // 副本上剥掉动画类再比较，替换用原件
-  function normalizedHtml(root){
-    const clone = root.cloneNode(true);
-    clone.classList.remove('animate-fade-in');
-    return clone.outerHTML;
+  function stop(){
+    if(timer){ clearTimeout(timer); timer = null; }
   }
 
-  async function silentRefresh(){
-    if(inFlight) return;
-    inFlight = true;
+  async function refreshOnce(){
     try{
-      const resp = await fetch(window.location.href, {headers: {'X-Requested-With': 'fetch-tab'}});
+      const url = new URL(window.location.href);
+      url.searchParams.set('fresh', '1');   // 绕过服务端缓存，拿真实状态
+      const resp = await fetch(url.toString(), {headers: {'X-Requested-With': 'fetch-tab'}});
       if(!resp.ok) return;
       const html = await resp.text();
       const doc = new DOMParser().parseFromString(html, 'text/html');
       const newRoot = doc.getElementById('tab-root');
       const curRoot = document.getElementById('tab-root');
-      if(!newRoot || !curRoot) return;
-      // 替换前重校验，期间有变动则放弃本次
-      if(document.getElementById('tab-root') !== curRoot) return;
+      if(!newRoot || !curRoot || document.getElementById('tab-root') !== curRoot) return;
       if(window.__ajaxFormBusy) return;
       if(document.querySelector('.custom-confirm-mask.is-open')) return;
-      if(normalizedHtml(newRoot) === normalizedHtml(curRoot)) return;
+      const clone = newRoot.cloneNode(true);
+      clone.classList.remove('animate-fade-in');
+      const curClone = curRoot.cloneNode(true);
+      curClone.classList.remove('animate-fade-in');
+      if(clone.outerHTML === curClone.outerHTML) return;   // 内容没变，不替换
       newRoot.classList.remove('animate-fade-in');
       curRoot.replaceWith(newRoot);
-    }catch(e){ /* 网络抖动等下次轮询 */ }
-    finally{ inFlight = false; }
+    }catch(e){ /* 网络抖动，下一次再试 */ }
   }
 
-  setInterval(() => {
-    if(document.visibilityState !== 'visible') return;          // 后台标签页不请求
-    if(document.querySelector('.custom-confirm-mask.is-open')) return; // 确认弹窗打开时不刷
-    if(!document.getElementById('tab-root')) return;
-    if(!hasTransitional()){ pollCount = 0; return; }            // 回到稳定态即重置预算
-    if(pollCount >= MAX_POLLS) return;                          // 超预算不再请求
-    pollCount++;
-    silentRefresh();
-  }, POLL_MS);
+  function tick(attempt){
+    if(attempt > MAX_ATTEMPTS || !hasTransitional()){ stop(); return; }
+    refreshOnce().then(() => {
+      if(!hasTransitional()){ stop(); return; }         // 已 running，提前结束
+      if(attempt < MAX_ATTEMPTS) timer = setTimeout(() => tick(attempt + 1), INTERVAL_MS);
+      else stop();
+    });
+  }
+
+  // 创建提交成功后调用（从"回到列表"开始计时）
+  window.__startCreateBurst = function(){
+    stop();
+    timer = setTimeout(() => tick(1), FIRST_DELAY_MS);
+  };
 })();
 
 // -------------------- 复制 IP + 标签页 AJAX 切换 --------------------
@@ -432,7 +432,6 @@ async function copyText(text){
       const newTabRoot = doc.getElementById('tab-root');
       const currentTabRoot = document.getElementById('tab-root');
       if(newTabRoot && currentTabRoot) currentTabRoot.replaceWith(newTabRoot);
-      if(window.__instPollReset) window.__instPollReset();
       const newFlashRoot = doc.getElementById('flash-root');
       const currentFlashRoot = document.getElementById('flash-root');
       if(newFlashRoot && currentFlashRoot){
@@ -441,6 +440,10 @@ async function copyText(text){
       }
       if(response.url && response.url !== window.location.href) window.history.pushState({form: true}, '', response.url);
       if(window.__cleanURLMsg) window.__cleanURLMsg();
+      // 创建成功回到列表后：8 秒起每 1 秒拉一次真实状态（最多 5 次，running 即停）
+      if(form.action.indexOf('/aws/create') !== -1 && document.querySelector('[data-state]') && window.__startCreateBurst){
+        window.__startCreateBurst();
+      }
     }catch(e){ window.location.href = form.action; }
     finally{
       window.__ajaxFormBusy = Math.max(0, (window.__ajaxFormBusy || 0) - 1);

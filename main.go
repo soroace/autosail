@@ -121,8 +121,7 @@ func formatFlashError(err error) string {
 }
 
 const (
-	instCacheTTL   = 10 * time.Second // 实例列表缓存时长
-	instPollMargin = 2 * time.Second  // 前端轮询需略大于缓存时长
+	instCacheTTL = 10 * time.Second // 实例列表缓存时长
 )
 
 var (
@@ -131,11 +130,6 @@ var (
 	bundleCache = cache.New(10*time.Minute, 30*time.Minute)
 	appStore    *store.Store
 )
-
-// instPollIntervalMS 前端静默刷新间隔，由缓存时长推导，避免前后端各自硬编码而脱节
-func instPollIntervalMS() int {
-	return int((instCacheTTL + instPollMargin) / time.Millisecond)
-}
 
 //go:embed templates/*.html
 var templateFS embed.FS
@@ -458,7 +452,6 @@ func main() {
 	// templates
 	tmpl := template.Must(template.New("").Funcs(template.FuncMap{
 		"regionLabel": regionLabel,
-		"instPollMS":  instPollIntervalMS,
 	}).ParseFS(templateFS, "templates/*.html"))
 	r.SetHTMLTemplate(tmpl)
 
@@ -901,10 +894,12 @@ func main() {
 		}
 
 		// manage list
+		// fresh=1：跳过缓存直接查 AWS（创建后的启动轮询用，需要真实状态）
+		fresh := c.Query("fresh") == "1"
 		if tab == "manage" && activeHasCreds {
 			if manageService == "ec2" {
 				key := strings.Join([]string{"ec2inst", region, activeAK, activeProxy}, "|")
-				if v, ok := instCache.Get(key); ok {
+				if v, ok := instCache.Get(key); ok && !fresh {
 					data.EC2Instances = v.([]aws.EC2InstanceView)
 				} else {
 					cli, err := aws.NewEC2Client(c.Request.Context(), region, activeAK, activeKey.SecretKey, activeProxy)
@@ -922,7 +917,7 @@ func main() {
 				}
 			} else {
 				key := strings.Join([]string{"inst", region, activeAK, activeProxy}, "|")
-				if v, ok := instCache.Get(key); ok {
+				if v, ok := instCache.Get(key); ok && !fresh {
 					data.Instances = v.([]aws.InstanceView)
 				} else {
 					cli, err := aws.NewLightsailClient(c.Request.Context(), region, activeAK, activeKey.SecretKey, activeProxy)

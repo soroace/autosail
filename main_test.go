@@ -2,11 +2,9 @@ package main
 
 import (
 	"bytes"
-	"fmt"
 	"html/template"
 	"strings"
 	"testing"
-	"time"
 
 	"autosail/internal/aws"
 )
@@ -35,7 +33,6 @@ func parseTemplates(t *testing.T) *template.Template {
 	t.Helper()
 	tmpl, err := template.New("").Funcs(template.FuncMap{
 		"regionLabel": regionLabel,
-		"instPollMS":  instPollIntervalMS,
 	}).ParseFS(templateFS, "templates/*.html")
 	if err != nil {
 		t.Fatalf("解析模板失败: %v", err)
@@ -85,23 +82,6 @@ func TestTemplatesRenderInstances(t *testing.T) {
 }
 
 // 轮询间隔必须由服务端按缓存时长注入，避免前端另写一份硬编码
-func TestTemplatesInjectPollInterval(t *testing.T) {
-	tmpl := parseTemplates(t)
-
-	var buf bytes.Buffer
-	if err := tmpl.ExecuteTemplate(&buf, "layout", PageData{Title: "AutoSail", Username: "tester"}); err != nil {
-		t.Fatalf("渲染 layout 失败: %v", err)
-	}
-
-	want := fmt.Sprintf(`data-inst-poll-ms="%d"`, instPollIntervalMS())
-	if !strings.Contains(buf.String(), want) {
-		t.Fatalf("渲染结果缺少 %q（前端轮询间隔未注入）", want)
-	}
-	if instPollIntervalMS() <= int(instCacheTTL/time.Millisecond) {
-		t.Fatalf("轮询间隔必须大于缓存时长：poll=%dms ttl=%dms", instPollIntervalMS(), instCacheTTL/time.Millisecond)
-	}
-}
-
 func TestLoginTemplateRenders(t *testing.T) {
 	tmpl := parseTemplates(t)
 	var buf bytes.Buffer
