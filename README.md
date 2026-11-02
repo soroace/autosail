@@ -6,7 +6,7 @@
 
 ### 1. 安装 Go
 
-请先安装 Go 最新稳定版本（**建议 ≥ 1.25**）。
+请先安装 Go 最新稳定版本（**最低要求 ≥ 1.23**）。
 
 官方下载地址：<https://go.dev/dl/>
 
@@ -41,7 +41,7 @@ go version
 2. 下载 Go 压缩包（以下为示例版本，请按最新版本号替换）：
 
 ```bash
-wget https://go.dev/dl/go1.25.0.linux-amd64.tar.gz
+wget https://go.dev/dl/go1.23.12.linux-amd64.tar.gz
 ```
 
 3. 删除旧版本（如有）：
@@ -53,7 +53,7 @@ sudo rm -rf /usr/local/go
 4. 解压到 `/usr/local`：
 
 ```bash
-sudo tar -C /usr/local -xzf go1.25.0.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.23.12.linux-amd64.tar.gz
 ```
 
 5. 配置环境变量（推荐同时配置 `PATH` 和 `GOPATH`）：
@@ -72,7 +72,7 @@ source ~/.bashrc
 go version
 ```
 
-输出类似 `go version go1.25.0 linux/amd64` 表示安装成功。
+输出类似 `go version go1.23.12 linux/amd64` 表示安装成功（版本号以实际下载的为准）。
 
 ##### 方法 2：包管理器安装（操作简单，但版本可能偏旧）
 

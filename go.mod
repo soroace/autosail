@@ -1,6 +1,6 @@
 module autosail
 
-go 1.25.0
+go 1.23.0
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.1
@@ -12,7 +12,7 @@ require (
 	github.com/aws/smithy-go v1.24.0
 	github.com/gin-gonic/gin v1.10.0
 	github.com/patrickmn/go-cache v2.1.0+incompatible
-	golang.org/x/crypto v0.54.0
+	golang.org/x/crypto v0.41.0
 	modernc.org/sqlite v1.29.2
 )
 
@@ -52,9 +52,9 @@ require (
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.2.12 // indirect
 	golang.org/x/arch v0.8.0 // indirect
-	golang.org/x/net v0.57.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/text v0.41.0 // indirect
+	golang.org/x/net v0.43.0 // indirect
+	golang.org/x/sys v0.35.0 // indirect
+	golang.org/x/text v0.28.0 // indirect
 	google.golang.org/protobuf v1.34.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	modernc.org/gc/v3 v3.0.0-20240107210532-573471604cb6 // indirect
