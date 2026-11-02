@@ -33,7 +33,7 @@ go version
 
 适用发行版：Ubuntu / Debian / CentOS / Rocky / AlmaLinux / Arch 等。
 
-##### 方法 1：官方二进制安装（最推荐）
+##### 官方二进制安装（推荐）
 
 这是 Go 官方推荐方式，版本更新及时、安装路径清晰、升级可控。
 
@@ -74,56 +74,9 @@ go version
 
 输出类似 `go version go1.23.12 linux/amd64` 表示安装成功（版本号以实际下载的为准）。
 
-##### 方法 2：包管理器安装（操作简单，但版本可能偏旧）
-
-```bash
-# Ubuntu / Debian
-sudo apt update && sudo apt install -y golang-go
-
-# CentOS / RHEL / Rocky / AlmaLinux
-sudo yum install -y golang
-
-# Fedora
-sudo dnf install -y golang
-
-# Arch Linux
-sudo pacman -S --noconfirm go
-```
-
-安装后验证：
-
-```bash
-go version
-```
-
-##### 方法 3：源码安装（仅高级用户需要）
-
-通常不建议日常使用，适用于需要自定义编译参数或研究 Go 源码的场景。
-
-```bash
-# 安装基础编译工具（Debian/Ubuntu 示例）
-sudo apt update
-sudo apt install -y git gcc g++ make
-
-# 获取 Go 源码
-git clone https://go.googlesource.com/go ~/go-src
-cd ~/go-src/src
-
-# 使用源码脚本构建
-./make.bash
-```
-
-构建完成后，将生成的二进制加入 PATH（示例路径）：
-
-```bash
-echo 'export PATH=$PATH:$HOME/go-src/bin' >> ~/.bashrc
-source ~/.bashrc
-go version
-```
-
 ##### Linux 安装最佳实践
 
-- 生产环境优先用“方法 1（官方二进制）”，升级和回滚最稳妥。
+- 生产环境推荐用官方二进制安装，升级和回滚最稳妥。
 - `linux-amd64` 适用于 x86_64；ARM 服务器请下载 `linux-arm64` 包。
 - 不要混用多个安装来源（例如同时用 apt 和 /usr/local），避免版本冲突。
 - 升级时重复“下载 -> 删除旧版本 -> 解压 -> 验证”即可。
