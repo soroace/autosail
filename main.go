@@ -156,6 +156,20 @@ func mustEnvInt(key string, def int) int {
 	return i
 }
 
+// mustEnvDuration 读取时长型环境变量（如 168h、30m），非法值回退默认
+func mustEnvDuration(key string, def time.Duration) time.Duration {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		log.Printf("环境变量 %s=%q 无效，使用默认值 %v", key, v, def)
+		return def
+	}
+	return d
+}
+
 var lightsailRegionOptions = []RegionOption{
 	{ID: "ap-northeast-1", Name: "东京 Tokyo"},
 	{ID: "ap-northeast-2", Name: "首尔 Seoul"},
@@ -436,6 +450,8 @@ func main() {
 	if dbPath == "" {
 		dbPath = filepath.Join("data", "app.db")
 	}
+	// 会话空闲超时，可用 SESSION_TTL 覆盖（如 168h、720h）
+	sessTTL := mustEnvDuration("SESSION_TTL", 7*24*time.Hour)
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		panic(err)
 	}
@@ -455,17 +471,21 @@ func main() {
 	}).ParseFS(templateFS, "templates/*.html"))
 	r.SetHTMLTemplate(tmpl)
 
-	// session store
-	store := session.NewStore()
+	// session store：会话写入 SQLite，重启后仍保持登录
+	sessStore, err := session.NewStoreWithDB(appStore.DB(), sessTTL)
+	if err != nil {
+		panic(err)
+	}
+	defer sessStore.Close()
 
 	// Middleware: get/create session
 	r.Use(func(c *gin.Context) {
 		sid, err := c.Cookie("sid")
 		if err != nil || sid == "" {
 			sid = genSessionID()
-			c.SetCookie("sid", sid, 3600*24*7, "/", "", false, true)
+			c.SetCookie("sid", sid, int(sessTTL.Seconds()), "/", "", false, true)
 		}
-		s := store.GetOrCreate(sid)
+		s := sessStore.GetOrCreate(sid)
 		c.Set("sess", s)
 		c.Set("sid", sid)
 		c.Next()

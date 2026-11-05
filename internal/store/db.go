@@ -65,6 +65,11 @@ func (s *Store) Close() error {
 	return nil
 }
 
+// DB 暴露底层连接，供其它模块（如会话持久化）复用同一个连接池
+func (s *Store) DB() *sql.DB {
+	return s.db
+}
+
 func (s *Store) initSchema(ctx context.Context) error {
 	queries := []string{
 		`CREATE TABLE IF NOT EXISTS users (
